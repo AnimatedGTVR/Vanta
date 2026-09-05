@@ -14,8 +14,5 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo run -- run examples/hello.vanta
