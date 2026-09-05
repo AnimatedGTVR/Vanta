@@ -16,43 +16,31 @@ Vanta is designed around:
 * a moderate learning curve with a high skill ceiling
 * native-performance-focused development
 
-## Example
+## First executable milestone
 
 ```vanta
-unit Player;
+module Main;
 
-* PLAYER *
-
-typ Player = pack {
-    imm ID: int;
-    Name: string;
-    Health: int;
-};
-
-typ mut player: Player = {
-    ID = 1;
-    Name = "Player";
-    Health = 100;
-};
-
-fuct Damage(amount int): void {
-    player.Health -= amount;
-
-    if (player.Health <= 0) {
-        terminate 1;
-    }
+func Add(let a::int, let b::int)::int {
+    return a + b;
 }
 
-* ENTRY *
-
-fuct Start(): void {
-    Damage(25);
-    terminate 0;
+func Start()::void {
+    let answer = Add(20, 22);
+    emit("Answer: {answer}");
 }
+```
+
+Run it with:
+
+```sh
+cargo run -- run examples/hello.vanta
 ```
 
 ## Current Status
 
-Vanta is currently in early development. Core syntax, packs, functions, mutability, collections, error handling, VPM, and the compiler/toolchain are still being designed and implemented.
+Vanta is in early development. The Rust reference implementation currently supports modules, functions, typed parameters and returns, immutable and mutable bindings, primitive values, expressions, function calls, conditionals, string interpolation, and `emit`.
+
+The next milestones are static type checking, source-span diagnostics, `pack` and `pick`, explicit error handling, and native code generation.
 
 **Vanta is not intended to be a beginner-first language.** It assumes some prior programming experience.
