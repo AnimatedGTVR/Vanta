@@ -1,0 +1,43 @@
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenKind {
+    Module,
+    Func,
+    Let,
+    Mut,
+    Return,
+    If,
+    Else,
+    True,
+    False,
+    Identifier(String),
+    Integer(i64),
+    String(String),
+    LeftParen,
+    RightParen,
+    LeftBrace,
+    RightBrace,
+    Comma,
+    Semicolon,
+    Dot,
+    ColonColon,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Equal,
+    EqualEqual,
+    Bang,
+    BangEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Eof,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub line: usize,
+    pub column: usize,
+}

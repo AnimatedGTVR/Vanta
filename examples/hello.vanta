@@ -1,0 +1,10 @@
+module Main;
+
+func Add(let a::int, let b::int)::int {
+    return a + b;
+}
+
+func Start()::void {
+    let answer = Add(20, 22);
+    emit("Answer: {answer}");
+}
