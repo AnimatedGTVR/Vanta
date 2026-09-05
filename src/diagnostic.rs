@@ -9,13 +9,21 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn new(message: impl Into<String>, line: usize, column: usize) -> Self {
-        Self { message: message.into(), line, column }
+        Self {
+            message: message.into(),
+            line,
+            column,
+        }
     }
 }
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Error[V0001] at {}:{}: {}", self.line, self.column, self.message)
+        write!(
+            f,
+            "Error[V0001] at {}:{}: {}",
+            self.line, self.column, self.message
+        )
     }
 }
 
