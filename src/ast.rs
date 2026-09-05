@@ -1,5 +1,8 @@
 #[derive(Debug, Clone, PartialEq)]
-pub struct Program { pub module: String, pub functions: Vec<Function> }
+pub struct Program {
+    pub module: String,
+    pub functions: Vec<Function>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
@@ -10,17 +13,38 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Parameter { pub name: String, pub mutable: bool, pub ty: Type }
+pub struct Parameter {
+    pub name: String,
+    pub mutable: bool,
+    pub ty: Type,
+}
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Type { Int, Bool, String, Void }
+pub enum Type {
+    Int,
+    Bool,
+    String,
+    Void,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
-    Bind { name: String, mutable: bool, ty: Option<Type>, value: Expression },
-    Assign { name: String, value: Expression },
+    Bind {
+        name: String,
+        mutable: bool,
+        ty: Option<Type>,
+        value: Expression,
+    },
+    Assign {
+        name: String,
+        value: Expression,
+    },
     Return(Option<Expression>),
-    If { condition: Expression, then_body: Vec<Statement>, else_body: Vec<Statement> },
+    If {
+        condition: Expression,
+        then_body: Vec<Statement>,
+        else_body: Vec<Statement>,
+    },
     Expression(Expression),
 }
 
@@ -30,13 +54,37 @@ pub enum Expression {
     Bool(bool),
     String(String),
     Variable(String),
-    Unary { operator: UnaryOperator, operand: Box<Expression> },
-    Binary { left: Box<Expression>, operator: BinaryOperator, right: Box<Expression> },
-    Call { name: String, arguments: Vec<Expression> },
+    Unary {
+        operator: UnaryOperator,
+        operand: Box<Expression>,
+    },
+    Binary {
+        left: Box<Expression>,
+        operator: BinaryOperator,
+        right: Box<Expression>,
+    },
+    Call {
+        name: String,
+        arguments: Vec<Expression>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum UnaryOperator { Negate, Not }
+pub enum UnaryOperator {
+    Negate,
+    Not,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BinaryOperator { Add, Subtract, Multiply, Divide, Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual }
+pub enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+}
