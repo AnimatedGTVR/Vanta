@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Write;
 
 use crate::ast::*;
 use crate::builtins;
@@ -7,11 +8,15 @@ use crate::diagnostic::Diagnostic;
 
 const MAX_CALL_DEPTH: usize = 256;
 
+/// Namespaces reserved for the standard library; modules may not use them as names.
+pub const BUILTIN_NAMESPACES: &[&str] = &["String", "List", "File", "Dir", "Process", "Env"];
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Bool(bool),
     String(String),
+    List(Vec<Value>),
     Void,
 }
 
@@ -21,9 +26,106 @@ impl fmt::Display for Value {
             Value::Int(v) => write!(f, "{v}"),
             Value::Bool(v) => write!(f, "{v}"),
             Value::String(v) => write!(f, "{v}"),
+            Value::List(items) => {
+                write!(f, "[")?;
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                write!(f, "]")
+            }
             Value::Void => Ok(()),
         }
     }
+}
+
+/// Every module a program loaded, keyed by module name, plus which one to start.
+pub struct Modules {
+    pub entry: String,
+    pub programs: HashMap<String, Program>,
+}
+
+/// Where `emit` writes.
+pub enum Sink {
+    Stdout,
+    Buffer(String),
+}
+
+pub struct Execution {
+    pub exit_code: i32,
+    /// What `emit` wrote, when the sink was a buffer.
+    pub output: String,
+}
+
+/// Stack for the interpreter thread: deep enough that `MAX_CALL_DEPTH` Vanta calls
+/// always end in a diagnostic, never a native stack overflow (debug builds included).
+const INTERPRETER_STACK_BYTES: usize = 256 * 1024 * 1024;
+
+/// Runs `Start` in the entry module.
+pub fn interpret(
+    modules: &Modules,
+    args: Vec<String>,
+    sink: Sink,
+) -> Result<Execution, Diagnostic> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("vanta".into())
+            .stack_size(INTERPRETER_STACK_BYTES)
+            .spawn_scoped(scope, || interpret_on_this_thread(modules, args, sink))
+            .map_err(|cause| runtime(format!("could not start the interpreter: {cause}")))?
+            .join()
+            .unwrap_or_else(|_| Err(runtime("the interpreter panicked")))
+    })
+}
+
+fn interpret_on_this_thread(
+    modules: &Modules,
+    args: Vec<String>,
+    sink: Sink,
+) -> Result<Execution, Diagnostic> {
+    let entry = &modules.programs[&modules.entry];
+    if !entry.functions.iter().any(|f| f.name == "Start") {
+        return Err(runtime("entry function `Start` was not found"));
+    }
+    let mut interpreter = Interpreter {
+        modules,
+        args,
+        sink,
+        call_depth: 0,
+    };
+    let exit_code = match interpreter.call(&modules.entry, "Start", Vec::new()) {
+        Ok(_) => 0,
+        Err(Halt::Exit(code)) => code,
+        Err(Halt::Error(diagnostic)) => {
+            interpreter.flush();
+            return Err(diagnostic);
+        }
+    };
+    interpreter.flush();
+    let output = match interpreter.sink {
+        Sink::Buffer(output) => output,
+        Sink::Stdout => String::new(),
+    };
+    Ok(Execution { exit_code, output })
+}
+
+/// Why evaluation stopped early.
+enum Halt {
+    Error(Diagnostic),
+    Exit(i32),
+}
+
+impl From<Diagnostic> for Halt {
+    fn from(diagnostic: Diagnostic) -> Self {
+        Halt::Error(diagnostic)
+    }
+}
+
+enum Flow {
+    Normal,
+    Return(Value),
 }
 
 #[derive(Clone)]
@@ -32,87 +134,212 @@ struct Binding {
     mutable: bool,
 }
 
-pub fn interpret(program: &Program) -> Result<String, Diagnostic> {
-    let mut interpreter = Interpreter {
-        program,
-        output: String::new(),
-        call_depth: 0,
-    };
-    if !program.functions.iter().any(|f| f.name == "Start") {
-        return Err(runtime("entry function `Start` was not found"));
+/// Block scopes of one function call, innermost last. A name may not be rebound
+/// while an outer block of the same call still has it.
+struct Scopes {
+    frames: Vec<HashMap<String, Binding>>,
+}
+
+impl Scopes {
+    fn new() -> Self {
+        Self {
+            frames: vec![HashMap::new()],
+        }
     }
-    interpreter.call("Start", Vec::new())?;
-    Ok(interpreter.output)
+
+    fn get(&self, name: &str) -> Option<&Binding> {
+        self.frames.iter().rev().find_map(|frame| frame.get(name))
+    }
+
+    fn define(&mut self, name: &str, value: Value, mutable: bool) -> Result<(), Diagnostic> {
+        if self.get(name).is_some() {
+            return Err(runtime(format!("`{name}` is already defined")));
+        }
+        self.frames
+            .last_mut()
+            .expect("a call always has a scope")
+            .insert(name.to_owned(), Binding { value, mutable });
+        Ok(())
+    }
+
+    fn assign(&mut self, name: &str, value: Value) -> Result<(), Diagnostic> {
+        let binding = self
+            .frames
+            .iter_mut()
+            .rev()
+            .find_map(|frame| frame.get_mut(name))
+            .ok_or_else(|| runtime(format!("unknown variable `{name}`")))?;
+        if !binding.mutable {
+            return Err(runtime(format!(
+                "cannot assign to immutable variable `{name}`"
+            )));
+        }
+        if std::mem::discriminant(&binding.value) != std::mem::discriminant(&value) {
+            return Err(runtime("assignment cannot change a variable's type"));
+        }
+        binding.value = value;
+        Ok(())
+    }
 }
 
 struct Interpreter<'a> {
-    program: &'a Program,
-    output: String,
+    modules: &'a Modules,
+    args: Vec<String>,
+    sink: Sink,
     call_depth: usize,
 }
 
-impl Interpreter<'_> {
-    fn call(&mut self, name: &str, arguments: Vec<Value>) -> Result<Value, Diagnostic> {
+impl<'a> Interpreter<'a> {
+    fn flush(&mut self) {
+        if let Sink::Stdout = self.sink {
+            let _ = std::io::stdout().flush();
+        }
+    }
+
+    fn call(&mut self, module: &str, name: &str, arguments: Vec<Value>) -> Result<Value, Halt> {
         if self.call_depth >= MAX_CALL_DEPTH {
-            return Err(runtime(format!(
-                "maximum call depth of {MAX_CALL_DEPTH} exceeded"
-            )));
+            return Err(runtime(format!("maximum call depth of {MAX_CALL_DEPTH} exceeded")).into());
         }
         self.call_depth += 1;
-        let result = self.call_inner(name, arguments);
+        let result = self.call_inner(module, name, arguments);
         self.call_depth -= 1;
         result
     }
 
-    fn call_inner(&mut self, name: &str, arguments: Vec<Value>) -> Result<Value, Diagnostic> {
-        if name == "emit" {
-            if arguments.len() != 1 {
-                return Err(runtime("`emit` expects exactly one argument"));
+    fn call_inner(
+        &mut self,
+        module: &str,
+        name: &str,
+        arguments: Vec<Value>,
+    ) -> Result<Value, Halt> {
+        match name {
+            "emit" => {
+                if arguments.len() != 1 {
+                    return Err(runtime("`emit` expects exactly one argument").into());
+                }
+                match &mut self.sink {
+                    Sink::Stdout => {
+                        let mut stdout = std::io::stdout().lock();
+                        let _ = writeln!(stdout, "{}", arguments[0]);
+                        let _ = stdout.flush();
+                    }
+                    Sink::Buffer(output) => {
+                        output.push_str(&arguments[0].to_string());
+                        output.push('\n');
+                    }
+                }
+                return Ok(Value::Void);
             }
-            self.output.push_str(&arguments[0].to_string());
-            self.output.push('\n');
-            return Ok(Value::Void);
+            "emitError" => {
+                if arguments.len() != 1 {
+                    return Err(runtime("`emitError` expects exactly one argument").into());
+                }
+                self.flush();
+                eprintln!("{}", arguments[0]);
+                return Ok(Value::Void);
+            }
+            "Process.Exit" => {
+                return match arguments.as_slice() {
+                    [Value::Int(code)] => i32::try_from(*code).map(Halt::Exit).map_or_else(
+                        |_| Err(runtime("`Process.Exit` code is out of range").into()),
+                        Err,
+                    ),
+                    _ => Err(runtime("`Process.Exit` expects one int").into()),
+                };
+            }
+            "Env.Args" => {
+                if !arguments.is_empty() {
+                    return Err(runtime("`Env.Args` expects no arguments").into());
+                }
+                return Ok(Value::List(
+                    self.args.iter().cloned().map(Value::String).collect(),
+                ));
+            }
+            _ => {}
         }
         if let Some(result) = builtins::call(name, &arguments) {
-            return result;
+            return result.map_err(Halt::from);
         }
-        let function = self
-            .program
+
+        let (target_module, function_name) = self.resolve(module, name)?;
+        let modules: &'a Modules = self.modules;
+        let function = modules.programs[&target_module]
             .functions
             .iter()
-            .find(|f| f.name == name)
-            .cloned()
-            .ok_or_else(|| runtime(format!("unknown function `{name}`")))?;
+            .find(|f| f.name == function_name)
+            .expect("resolve only returns existing functions");
         if function.parameters.len() != arguments.len() {
             return Err(runtime(format!(
                 "`{name}` expects {} argument(s), received {}",
                 function.parameters.len(),
                 arguments.len()
-            )));
+            ))
+            .into());
         }
-        let mut environment = HashMap::new();
+        let mut scopes = Scopes::new();
         for (parameter, value) in function.parameters.iter().zip(arguments) {
             ensure_type(&value, &parameter.ty)?;
-            environment.insert(
-                parameter.name.clone(),
-                Binding {
-                    value,
-                    mutable: parameter.mutable,
-                },
-            );
+            scopes.define(&parameter.name, value, parameter.mutable)?;
         }
-        let result = self
-            .execute_block(&function.body, &mut environment)?
-            .unwrap_or(Value::Void);
+        let result = match self.execute_block(&target_module, &function.body, &mut scopes)? {
+            Flow::Return(value) => value,
+            Flow::Normal => Value::Void,
+        };
         ensure_type(&result, &function.return_type)?;
         Ok(result)
     }
 
+    /// `Name` is a function of the calling module; `Alias.Name` is a `pub` function of a
+    /// module the calling module imported with `@use`, named by its last segment.
+    fn resolve(&self, module: &str, name: &str) -> Result<(String, String), Diagnostic> {
+        let program = &self.modules.programs[module];
+        let Some((alias, function)) = name.rsplit_once('.') else {
+            return if program.functions.iter().any(|f| f.name == name) {
+                Ok((module.to_owned(), name.to_owned()))
+            } else {
+                Err(runtime(format!("unknown function `{name}`")))
+            };
+        };
+        let imported = program
+            .uses
+            .iter()
+            .find(|used| used.rsplit('.').next() == Some(alias))
+            .ok_or_else(|| {
+                runtime(format!(
+                    "unknown function `{name}`: no `@use` names a module `{alias}`"
+                ))
+            })?;
+        let target = self.modules.programs[imported]
+            .functions
+            .iter()
+            .find(|f| f.name == function)
+            .ok_or_else(|| runtime(format!("module `{imported}` has no function `{function}`")))?;
+        if !target.public {
+            return Err(runtime(format!(
+                "`{function}` is private to module `{imported}`; declare it `pub func` to call it from `{module}`"
+            )));
+        }
+        Ok((imported.clone(), function.to_owned()))
+    }
+
     fn execute_block(
         &mut self,
+        module: &str,
         statements: &[Statement],
-        env: &mut HashMap<String, Binding>,
-    ) -> Result<Option<Value>, Diagnostic> {
+        scopes: &mut Scopes,
+    ) -> Result<Flow, Halt> {
+        scopes.frames.push(HashMap::new());
+        let flow = self.execute_statements(module, statements, scopes);
+        scopes.frames.pop();
+        flow
+    }
+
+    fn execute_statements(
+        &mut self,
+        module: &str,
+        statements: &[Statement],
+        scopes: &mut Scopes,
+    ) -> Result<Flow, Halt> {
         for statement in statements {
             match statement {
                 Statement::Bind {
@@ -121,39 +348,19 @@ impl Interpreter<'_> {
                     ty,
                     value,
                 } => {
-                    if env.contains_key(name) {
-                        return Err(runtime(format!("`{name}` is already defined")));
-                    }
-                    let value = self.evaluate(value, env)?;
+                    let value = self.evaluate(module, value, scopes)?;
                     if let Some(ty) = ty {
                         ensure_type(&value, ty)?;
                     }
-                    env.insert(
-                        name.clone(),
-                        Binding {
-                            value,
-                            mutable: *mutable,
-                        },
-                    );
+                    scopes.define(name, value, *mutable)?;
                 }
                 Statement::Assign { name, value } => {
-                    let value = self.evaluate(value, env)?;
-                    let binding = env
-                        .get_mut(name)
-                        .ok_or_else(|| runtime(format!("unknown variable `{name}`")))?;
-                    if !binding.mutable {
-                        return Err(runtime(format!(
-                            "cannot assign to immutable variable `{name}`"
-                        )));
-                    }
-                    if std::mem::discriminant(&binding.value) != std::mem::discriminant(&value) {
-                        return Err(runtime("assignment cannot change a variable's type"));
-                    }
-                    binding.value = value;
+                    let value = self.evaluate(module, value, scopes)?;
+                    scopes.assign(name, value)?;
                 }
                 Statement::Return(expression) => {
-                    return Ok(Some(match expression {
-                        Some(expr) => self.evaluate(expr, env)?,
+                    return Ok(Flow::Return(match expression {
+                        Some(expr) => self.evaluate(module, expr, scopes)?,
                         None => Value::Void,
                     }));
                 }
@@ -162,46 +369,119 @@ impl Interpreter<'_> {
                     then_body,
                     else_body,
                 } => {
-                    let condition = self.evaluate(condition, env)?;
-                    let branch = match condition {
+                    let branch = match self.evaluate(module, condition, scopes)? {
                         Value::Bool(true) => then_body,
                         Value::Bool(false) => else_body,
-                        _ => return Err(runtime("if condition must be `bool`")),
+                        _ => return Err(runtime("if condition must be `bool`").into()),
                     };
-                    if let Some(value) = self.execute_block(branch, env)? {
-                        return Ok(Some(value));
+                    if let Flow::Return(value) = self.execute_block(module, branch, scopes)? {
+                        return Ok(Flow::Return(value));
                     }
                 }
+                Statement::For {
+                    name,
+                    iterable,
+                    body,
+                } => {
+                    let items = match iterable {
+                        Iterable::Range(start, end) => {
+                            match (
+                                self.evaluate(module, start, scopes)?,
+                                self.evaluate(module, end, scopes)?,
+                            ) {
+                                (Value::Int(start), Value::Int(end)) => {
+                                    (start..end).map(Value::Int).collect()
+                                }
+                                _ => return Err(runtime("a `for` range needs int bounds").into()),
+                            }
+                        }
+                        Iterable::List(list) => match self.evaluate(module, list, scopes)? {
+                            Value::List(items) => items,
+                            _ => return Err(runtime("`for ... in` needs a list or a range").into()),
+                        },
+                    };
+                    for item in items {
+                        scopes.frames.push(HashMap::new());
+                        let flow = scopes
+                            .define(name, item, false)
+                            .map_err(Halt::from)
+                            .and_then(|()| self.execute_block(module, body, scopes));
+                        scopes.frames.pop();
+                        if let Flow::Return(value) = flow? {
+                            return Ok(Flow::Return(value));
+                        }
+                    }
+                }
+                Statement::Ask {
+                    binding,
+                    value,
+                    else_body,
+                } => match self.evaluate(module, value, scopes) {
+                    Ok(value) => {
+                        if let Some(binding) = binding {
+                            if let Some(ty) = &binding.ty {
+                                ensure_type(&value, ty)?;
+                            }
+                            scopes.define(&binding.name, value, binding.mutable)?;
+                        }
+                    }
+                    Err(Halt::Error(failure)) if failure.recoverable => {
+                        scopes.frames.push(HashMap::new());
+                        let flow = scopes
+                            .define("error", Value::String(failure.message), false)
+                            .map_err(Halt::from)
+                            .and_then(|()| self.execute_block(module, else_body, scopes));
+                        scopes.frames.pop();
+                        match flow? {
+                            Flow::Return(value) => return Ok(Flow::Return(value)),
+                            Flow::Normal if binding.is_some() => {
+                                return Err(runtime(
+                                    "the `else` block of `let ... = ask` must `return` or call `Process.Exit`",
+                                )
+                                .into());
+                            }
+                            Flow::Normal => {}
+                        }
+                    }
+                    Err(halt) => return Err(halt),
+                },
                 Statement::Expression(expression) => {
-                    self.evaluate(expression, env)?;
+                    self.evaluate(module, expression, scopes)?;
                 }
             }
         }
-        Ok(None)
+        Ok(Flow::Normal)
     }
 
     fn evaluate(
         &mut self,
+        module: &str,
         expression: &Expression,
-        env: &HashMap<String, Binding>,
-    ) -> Result<Value, Diagnostic> {
+        scopes: &Scopes,
+    ) -> Result<Value, Halt> {
         match expression {
             Expression::Integer(v) => Ok(Value::Int(*v)),
             Expression::Bool(v) => Ok(Value::Bool(*v)),
-            Expression::String(v) => Ok(Value::String(interpolate(v, env)?)),
-            Expression::Variable(name) => env
+            Expression::String(v) => Ok(Value::String(interpolate(v, scopes)?)),
+            Expression::List(items) => Ok(Value::List(
+                items
+                    .iter()
+                    .map(|item| self.evaluate(module, item, scopes))
+                    .collect::<Result<_, _>>()?,
+            )),
+            Expression::Variable(name) => scopes
                 .get(name)
                 .map(|b| b.value.clone())
-                .ok_or_else(|| runtime(format!("unknown variable `{name}`"))),
+                .ok_or_else(|| runtime(format!("unknown variable `{name}`")).into()),
             Expression::Unary { operator, operand } => {
-                let value = self.evaluate(operand, env)?;
+                let value = self.evaluate(module, operand, scopes)?;
                 match (operator, value) {
                     (UnaryOperator::Negate, Value::Int(v)) => v
                         .checked_neg()
                         .map(Value::Int)
-                        .ok_or_else(|| runtime("integer overflow")),
+                        .ok_or_else(|| runtime("integer overflow").into()),
                     (UnaryOperator::Not, Value::Bool(v)) => Ok(Value::Bool(!v)),
-                    _ => Err(runtime("invalid unary operation")),
+                    _ => Err(runtime("invalid unary operation").into()),
                 }
             }
             Expression::Binary {
@@ -209,22 +489,59 @@ impl Interpreter<'_> {
                 operator,
                 right,
             } => {
-                let left = self.evaluate(left, env)?;
-                let right = self.evaluate(right, env)?;
-                binary(left, *operator, right)
+                let left = self.evaluate(module, left, scopes)?;
+                let right = self.evaluate(module, right, scopes)?;
+                Ok(binary(left, *operator, right)?)
+            }
+            Expression::Logical {
+                left,
+                operator,
+                right,
+            } => {
+                let Value::Bool(left) = self.evaluate(module, left, scopes)? else {
+                    return Err(runtime("`&&` and `||` need bool operands").into());
+                };
+                if matches!(
+                    (operator, left),
+                    (LogicalOperator::And, false) | (LogicalOperator::Or, true)
+                ) {
+                    return Ok(Value::Bool(left));
+                }
+                match self.evaluate(module, right, scopes)? {
+                    Value::Bool(right) => Ok(Value::Bool(right)),
+                    _ => Err(runtime("`&&` and `||` need bool operands").into()),
+                }
+            }
+            Expression::Index { target, index } => {
+                match (
+                    self.evaluate(module, target, scopes)?,
+                    self.evaluate(module, index, scopes)?,
+                ) {
+                    (Value::List(items), Value::Int(index)) => usize::try_from(index)
+                        .ok()
+                        .and_then(|index| items.get(index).cloned())
+                        .ok_or_else(|| {
+                            runtime(format!(
+                                "list index {index} is out of range for a list of {} item(s)",
+                                items.len()
+                            ))
+                            .into()
+                        }),
+                    _ => Err(runtime("indexing needs a list and an int").into()),
+                }
             }
             Expression::Call { name, arguments } => {
                 let values = arguments
                     .iter()
-                    .map(|arg| self.evaluate(arg, env))
+                    .map(|arg| self.evaluate(module, arg, scopes))
                     .collect::<Result<Vec<_>, _>>()?;
-                self.call(name, values)
+                self.call(module, name, values)
             }
         }
     }
 }
 
-fn interpolate(text: &str, env: &HashMap<String, Binding>) -> Result<String, Diagnostic> {
+fn interpolate(text: &str, scopes: &Scopes) -> Result<String, Diagnostic> {
     let mut output = String::new();
     let mut rest = text;
     while let Some(start) = rest.find('{') {
@@ -234,7 +551,7 @@ fn interpolate(text: &str, env: &HashMap<String, Binding>) -> Result<String, Dia
             .find('}')
             .ok_or_else(|| runtime("unclosed interpolation in string"))?;
         let name = &tail[..end];
-        let value = env
+        let value = scopes
             .get(name)
             .ok_or_else(|| runtime(format!("unknown interpolation variable `{name}`")))?;
         output.push_str(&value.value.to_string());
@@ -270,17 +587,23 @@ fn checked_integer(value: Option<i64>) -> Result<Value, Diagnostic> {
 }
 
 fn ensure_type(value: &Value, ty: &Type) -> Result<(), Diagnostic> {
-    let valid = matches!(
-        (value, ty),
-        (Value::Int(_), Type::Int)
-            | (Value::Bool(_), Type::Bool)
-            | (Value::String(_), Type::String)
-            | (Value::Void, Type::Void)
-    );
-    if valid {
+    if matches_type(value, ty) {
         Ok(())
     } else {
         Err(runtime("value does not match declared type"))
+    }
+}
+
+fn matches_type(value: &Value, ty: &Type) -> bool {
+    match (value, ty) {
+        (Value::Int(_), Type::Int)
+        | (Value::Bool(_), Type::Bool)
+        | (Value::String(_), Type::String)
+        | (Value::Void, Type::Void) => true,
+        (Value::List(items), Type::List(element)) => {
+            items.iter().all(|item| matches_type(item, element))
+        }
+        _ => false,
     }
 }
 

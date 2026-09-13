@@ -5,6 +5,10 @@ pub struct Diagnostic {
     pub message: String,
     pub line: usize,
     pub column: usize,
+    /// A failure of the outside world (a missing file, a failed process, unparsable
+    /// input) that a program may handle with `ask ... else`. Everything else is a
+    /// program error and always stops the program.
+    pub recoverable: bool,
 }
 
 impl Diagnostic {
@@ -13,6 +17,15 @@ impl Diagnostic {
             message: message.into(),
             line,
             column,
+            recoverable: false,
+        }
+    }
+
+    /// A recoverable failure; see [`Diagnostic::recoverable`].
+    pub fn failure(message: impl Into<String>) -> Self {
+        Self {
+            recoverable: true,
+            ..Self::new(message, 0, 0)
         }
     }
 }

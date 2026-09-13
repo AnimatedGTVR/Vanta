@@ -14,23 +14,41 @@ struct Parser {
 impl Parser {
     fn program(&mut self) -> Result<Program, Diagnostic> {
         self.expect_simple(TokenKind::Module, "expected `module`")?;
-        let mut module = self.identifier("expected module name")?;
-        while self.take_simple(TokenKind::Dot) {
-            module.push('.');
-            module.push_str(&self.identifier("expected module name after `.`")?);
-        }
+        let module = self.dotted_name("expected module name")?;
         self.expect_simple(
             TokenKind::Semicolon,
             "expected `;` after module declaration",
         )?;
+        let mut uses = Vec::new();
+        while self.take_simple(TokenKind::Use) {
+            uses.push(self.dotted_name("expected module name after `@use`")?);
+            self.expect_simple(TokenKind::Semicolon, "expected `;` after `@use`")?;
+        }
         let mut functions = Vec::new();
         while !self.check(&TokenKind::Eof) {
+            if self.check(&TokenKind::Use) {
+                return Err(self.error("`@use` must come before any function"));
+            }
             functions.push(self.function()?);
         }
-        Ok(Program { module, functions })
+        Ok(Program {
+            module,
+            uses,
+            functions,
+        })
+    }
+
+    fn dotted_name(&mut self, message: &str) -> Result<String, Diagnostic> {
+        let mut name = self.identifier(message)?;
+        while self.take_simple(TokenKind::Dot) {
+            name.push('.');
+            name.push_str(&self.identifier("expected name after `.`")?);
+        }
+        Ok(name)
     }
 
     fn function(&mut self) -> Result<Function, Diagnostic> {
+        let public = self.take_simple(TokenKind::Pub);
         self.expect_simple(TokenKind::Func, "expected `func`")?;
         let name = self.identifier("expected function name")?;
         self.expect_simple(TokenKind::LeftParen, "expected `(`")?;
@@ -58,6 +76,7 @@ impl Parser {
         let body = self.block()?;
         Ok(Function {
             name,
+            public,
             parameters,
             return_type,
             body,
@@ -92,6 +111,30 @@ impl Parser {
             };
             self.expect_simple(TokenKind::Semicolon, "expected `;` after return")?;
             return Ok(Statement::Return(value));
+        }
+        if self.take_simple(TokenKind::For) {
+            let name = self.identifier("expected loop variable after `for`")?;
+            self.expect_simple(TokenKind::In, "expected `in` after loop variable")?;
+            let first = self.expression()?;
+            let iterable = if self.take_simple(TokenKind::DotDot) {
+                Iterable::Range(first, self.expression()?)
+            } else {
+                Iterable::List(first)
+            };
+            let body = self.block()?;
+            return Ok(Statement::For {
+                name,
+                iterable,
+                body,
+            });
+        }
+        if self.take_simple(TokenKind::Ask) {
+            let (value, else_body) = self.ask_tail()?;
+            return Ok(Statement::Ask {
+                binding: None,
+                value,
+                else_body,
+            });
         }
         if self.take_simple(TokenKind::If) {
             let condition = self.expression()?;
@@ -134,6 +177,14 @@ impl Parser {
             None
         };
         self.expect_simple(TokenKind::Equal, "expected `=` in binding")?;
+        if self.take_simple(TokenKind::Ask) {
+            let (value, else_body) = self.ask_tail()?;
+            return Ok(Statement::Ask {
+                binding: Some(AskBinding { name, mutable, ty }),
+                value,
+                else_body,
+            });
+        }
         let value = self.expression()?;
         self.expect_simple(TokenKind::Semicolon, "expected `;` after binding")?;
         Ok(Statement::Bind {
@@ -144,8 +195,42 @@ impl Parser {
         })
     }
 
+    /// `Expr else { ... };` after `ask`
+    fn ask_tail(&mut self) -> Result<(Expression, Vec<Statement>), Diagnostic> {
+        let value = self.expression()?;
+        self.expect_simple(TokenKind::Else, "expected `else` after `ask` expression")?;
+        let else_body = self.block()?;
+        self.expect_simple(
+            TokenKind::Semicolon,
+            "expected `;` after `ask ... else { }`",
+        )?;
+        Ok((value, else_body))
+    }
+
     fn expression(&mut self) -> Result<Expression, Diagnostic> {
-        self.equality()
+        self.or()
+    }
+    fn or(&mut self) -> Result<Expression, Diagnostic> {
+        let mut expr = self.and()?;
+        while self.take_simple(TokenKind::PipePipe) {
+            expr = Expression::Logical {
+                left: Box::new(expr),
+                operator: LogicalOperator::Or,
+                right: Box::new(self.and()?),
+            };
+        }
+        Ok(expr)
+    }
+    fn and(&mut self) -> Result<Expression, Diagnostic> {
+        let mut expr = self.equality()?;
+        while self.take_simple(TokenKind::AmpAmp) {
+            expr = Expression::Logical {
+                left: Box::new(expr),
+                operator: LogicalOperator::And,
+                right: Box::new(self.equality()?),
+            };
+        }
+        Ok(expr)
     }
     fn equality(&mut self) -> Result<Expression, Diagnostic> {
         let mut expr = self.comparison()?;
@@ -222,7 +307,19 @@ impl Parser {
     }
     fn call(&mut self) -> Result<Expression, Diagnostic> {
         let mut expr = self.primary()?;
-        while self.take_simple(TokenKind::LeftParen) {
+        loop {
+            if self.take_simple(TokenKind::LeftBracket) {
+                let index = self.expression()?;
+                self.expect_simple(TokenKind::RightBracket, "expected `]` after index")?;
+                expr = Expression::Index {
+                    target: Box::new(expr),
+                    index: Box::new(index),
+                };
+                continue;
+            }
+            if !self.take_simple(TokenKind::LeftParen) {
+                break;
+            }
             let name = match expr {
                 Expression::Variable(name) => name,
                 _ => return Err(self.error("only named functions can be called")),
@@ -255,6 +352,19 @@ impl Parser {
                 }
                 Ok(Expression::Variable(name))
             }
+            TokenKind::LeftBracket => {
+                let mut items = Vec::new();
+                if !self.check(&TokenKind::RightBracket) {
+                    loop {
+                        items.push(self.expression()?);
+                        if !self.take_simple(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.expect_simple(TokenKind::RightBracket, "expected `]` after list items")?;
+                Ok(Expression::List(items))
+            }
             TokenKind::LeftParen => {
                 let expr = self.expression()?;
                 self.expect_simple(TokenKind::RightParen, "expected `)`")?;
@@ -276,6 +386,12 @@ impl Parser {
                 "bool" => Ok(Type::Bool),
                 "string" => Ok(Type::String),
                 "void" => Ok(Type::Void),
+                "list" => {
+                    self.expect_simple(TokenKind::Less, "expected `<` after `list`")?;
+                    let element = self.ty()?;
+                    self.expect_simple(TokenKind::Greater, "expected `>` after list element type")?;
+                    Ok(Type::List(Box::new(element)))
+                }
                 _ => Err(Diagnostic::new(
                     format!("unknown type `{name}`"),
                     token.line,

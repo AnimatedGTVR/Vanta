@@ -1,12 +1,16 @@
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub module: String,
+    /// Modules named by `@use A.B;`, in source order.
+    pub uses: Vec<String>,
     pub functions: Vec<Function>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: String,
+    /// `pub func`: callable from other modules. Functions are private by default.
+    pub public: bool,
     pub parameters: Vec<Parameter>,
     pub return_type: Type,
     pub body: Vec<Statement>,
@@ -25,6 +29,8 @@ pub enum Type {
     Bool,
     String,
     Void,
+    /// `list<T>`
+    List(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,7 +51,34 @@ pub enum Statement {
         then_body: Vec<Statement>,
         else_body: Vec<Statement>,
     },
+    /// `for name in 0..10 { }` or `for name in list { }`
+    For {
+        name: String,
+        iterable: Iterable,
+        body: Vec<Statement>,
+    },
+    /// `let name = ask Expr else { };` (binding: the else block must return or exit)
+    /// or `ask Expr else { };` (statement: the else block may continue).
+    Ask {
+        binding: Option<AskBinding>,
+        value: Expression,
+        else_body: Vec<Statement>,
+    },
     Expression(Expression),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AskBinding {
+    pub name: String,
+    pub mutable: bool,
+    pub ty: Option<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Iterable {
+    /// `start..end`, end exclusive
+    Range(Expression, Expression),
+    List(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +86,7 @@ pub enum Expression {
     Integer(i64),
     Bool(bool),
     String(String),
+    List(Vec<Expression>),
     Variable(String),
     Unary {
         operator: UnaryOperator,
@@ -62,6 +96,16 @@ pub enum Expression {
         left: Box<Expression>,
         operator: BinaryOperator,
         right: Box<Expression>,
+    },
+    /// `&&` and `||`, which only evaluate the right side when needed.
+    Logical {
+        left: Box<Expression>,
+        operator: LogicalOperator,
+        right: Box<Expression>,
+    },
+    Index {
+        target: Box<Expression>,
+        index: Box<Expression>,
     },
     Call {
         name: String,
@@ -87,4 +131,10 @@ pub enum BinaryOperator {
     LessEqual,
     Greater,
     GreaterEqual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LogicalOperator {
+    And,
+    Or,
 }
