@@ -1,0 +1,18 @@
+module Main;
+
+#! Vanta supports documentation-style line comments.
+# Ordinary comments continue to the end of the line.
+#| Block comments may
+   span multiple lines. |#
+
+func Start()::void {
+    let message = String.Trim("  Hello from Vanta  ");
+    File.WriteText("vanta-output.txt", message);
+
+    if File.Exists("vanta-output.txt") {
+        emit(File.ReadText("vanta-output.txt"));
+    }
+
+    let platform = Process.Output("uname -s");
+    emit("Running on {platform}");
+}
