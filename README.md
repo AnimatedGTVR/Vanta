@@ -37,9 +37,50 @@ Run it with:
 cargo run -- run examples/hello.vanta
 ```
 
+## Standard library
+
+Vanta's first system APIs use qualified names:
+
+```vanta
+module Main;
+
+func Start()::void {
+    let message = String.Trim("  Hello from Vanta  ");
+    File.WriteText("message.txt", message);
+
+    if File.Exists("message.txt") {
+        emit(File.ReadText("message.txt"));
+    }
+
+    let kernel = Process.Output("uname -s");
+    emit("Kernel: {kernel}");
+}
+```
+
+Available APIs:
+
+| Namespace | Functions |
+| --- | --- |
+| `String` | `Length`, `Contains`, `StartsWith`, `EndsWith`, `ToUpper`, `ToLower`, `Trim`, `Replace`, `From` |
+| `File` | `Exists`, `ReadText`, `WriteText`, `AppendText` |
+| `Process` | `Run`, `Output` |
+| `Env` | `Has`, `Get` |
+
+`Process.Run` returns an exit code. `Process.Output` captures successful UTF-8 standard output and reports unsuccessful commands as diagnostics. Both APIs execute through the platform shell, so programs must not place untrusted text into commands.
+
+## Comments
+
+```vanta
+# A line comment
+#! A documentation-style line comment
+
+#| A block comment
+   spanning multiple lines. |#
+```
+
 ## Current Status
 
-Vanta is in early development. The Rust reference implementation currently supports modules, functions, typed parameters and returns, immutable and mutable bindings, primitive values, expressions, function calls, conditionals, string interpolation, and `emit`.
+Vanta is in early development. The Rust reference implementation currently supports modules, functions, typed parameters and returns, immutable and mutable bindings, primitive values, expressions, qualified function calls, conditionals, comments, string interpolation, output, file access, environment access, and process execution.
 
 The next milestones are static type checking, source-span diagnostics, `pack` and `pick`, explicit error handling, and native code generation.
 
