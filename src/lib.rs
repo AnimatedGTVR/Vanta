@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod builtins;
 pub mod diagnostic;
 pub mod interpreter;
 pub mod lexer;
@@ -15,6 +16,8 @@ pub fn run(source: &str) -> Result<String, Diagnostic> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::run;
 
     #[test]
@@ -74,5 +77,75 @@ mod tests {
                 .message
                 .contains("maximum call depth")
         );
+    }
+
+    #[test]
+    fn supports_all_comment_forms() {
+        let source = r#"
+            # ordinary line comment
+            #! documentation-style line comment
+            #| block comments
+               may span lines |#
+            module Main;
+            func Start()::void { emit("comments work"); } # trailing comment
+        "#;
+        assert_eq!(run(source).unwrap(), "comments work\n");
+    }
+
+    #[test]
+    fn provides_string_apis() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                let text = String.Trim("  Hello, Vanta!  ");
+                emit(String.Length(text));
+                emit(String.Contains(text, "Vanta"));
+                emit(String.Replace(text, "Vanta", "World"));
+                emit(String.ToUpper("safe"));
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "13\ntrue\nHello, World!\nSAFE\n");
+    }
+
+    #[test]
+    fn provides_environment_apis() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                emit(Env.Has("PATH"));
+                emit(String.Length(Env.Get("PATH")) > 0);
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "true\ntrue\n");
+    }
+
+    #[test]
+    fn provides_file_apis() {
+        let path = std::env::temp_dir().join(format!("vanta-test-{}.txt", std::process::id()));
+        let escaped_path = path.to_string_lossy().replace('\\', "\\\\");
+        let source = format!(
+            r#"module Main;
+                func Start()::void {{
+                    File.WriteText("{escaped_path}", "Vanta");
+                    File.AppendText("{escaped_path}", " works");
+                    emit(File.Exists("{escaped_path}"));
+                    emit(File.ReadText("{escaped_path}"));
+                }}"#
+        );
+        assert_eq!(run(&source).unwrap(), "true\nVanta works\n");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provides_process_apis() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                emit(Process.Output("printf Vanta"));
+                emit(Process.Run("exit 7"));
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "Vanta\n7\n");
     }
 }
