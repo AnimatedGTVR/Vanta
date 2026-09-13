@@ -167,13 +167,25 @@ impl Lexer {
                 let escaped = self.peek().ok_or_else(|| {
                     Diagnostic::new("unterminated escape", self.line, self.column)
                 })?;
+                let escape_line = self.line;
+                let escape_column = self.column;
                 self.advance();
                 value.push(match escaped {
                     'n' => '\n',
                     't' => '\t',
+                    'r' => '\r',
+                    '0' => '\0',
                     '"' => '"',
                     '\\' => '\\',
-                    other => other,
+                    other => {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "unknown escape `\\{other}` (use \\n, \\t, \\r, \\0, \\\" or \\\\)"
+                            ),
+                            escape_line,
+                            escape_column,
+                        ));
+                    }
                 });
             } else {
                 value.push(self.advance());

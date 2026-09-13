@@ -125,6 +125,10 @@ func Start()::void {
 
 `@use Updater.Guard;` loads `Updater/Guard.vanta` next to the program file, which must declare `module Updater.Guard;`. Functions are private by default; the imported module's `pub func` functions are called through its last name segment (`Guard.Allows`).
 
+## Strings
+
+String literals support the escapes `\n`, `\t`, `\r`, `\0`, `\"` and `\\`, and interpolate variables with `{name}`. Any other escape is an error, so a typo such as `"\R"` is reported instead of silently becoming a letter.
+
 ## Comments
 
 ```vanta

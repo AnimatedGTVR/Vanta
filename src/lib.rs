@@ -317,6 +317,23 @@ mod tests {
     }
 
     #[test]
+    fn supports_whitespace_escapes() {
+        let source = r#"module Main; func Start()::void { emit(String.Length("a\r\n\t\0b")); emit(String.Replace("x\ry", "\r", "-")); }"#;
+        assert_eq!(run(source).unwrap(), "6\nx-y\n");
+    }
+
+    #[test]
+    fn rejects_unknown_escapes() {
+        let source = r#"module Main; func Start()::void { emit("C:\Users"); }"#;
+        let error = run(source).unwrap_err();
+        assert!(
+            error.message.contains("unknown escape `\\U`"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
     fn compares_strings_by_bytes() {
         let source = r#"
             module Main;
