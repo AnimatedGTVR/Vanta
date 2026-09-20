@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::ast::*;
+use crate::builtins;
 use crate::diagnostic::Diagnostic;
 
 const MAX_CALL_DEPTH: usize = 256;
@@ -71,6 +72,9 @@ impl Interpreter<'_> {
             self.output.push_str(&arguments[0].to_string());
             self.output.push('\n');
             return Ok(Value::Void);
+        }
+        if let Some(result) = builtins::call(name, &arguments) {
+            return result;
         }
         let function = self
             .program

@@ -248,7 +248,13 @@ impl Parser {
             TokenKind::String(value) => Ok(Expression::String(value)),
             TokenKind::True => Ok(Expression::Bool(true)),
             TokenKind::False => Ok(Expression::Bool(false)),
-            TokenKind::Identifier(name) => Ok(Expression::Variable(name)),
+            TokenKind::Identifier(mut name) => {
+                while self.take_simple(TokenKind::Dot) {
+                    name.push('.');
+                    name.push_str(&self.identifier("expected name after `.`")?);
+                }
+                Ok(Expression::Variable(name))
+            }
             TokenKind::LeftParen => {
                 let expr = self.expression()?;
                 self.expect_simple(TokenKind::RightParen, "expected `)`")?;
