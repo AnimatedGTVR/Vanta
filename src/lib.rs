@@ -781,6 +781,38 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn returns_structured_process_results_for_nonzero_exits() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                let result = Process.Result([
+                    "sh", "-c", "printf output; printf problem >&2; exit 7"
+                ]);
+                emit(result.success);
+                emit(result.code);
+                emit(result.stdout);
+                emit(result.stderr);
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "false\n7\noutput\nproblem\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn structured_process_start_failures_work_with_ask() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                ask Process.Result(["/definitely/not/a/program"]) else {
+                    emit("could not start");
+                };
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "could not start\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn provides_process_apis() {
         let source = r#"
             module Main;
