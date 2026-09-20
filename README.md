@@ -133,6 +133,24 @@ func Length(let x::float, let y::float)::float {
 let speed::float = Length(3.0, 4.0);
 ```
 
+## Module configuration
+
+Immutable `let` bindings may appear at module scope. They are evaluated once in source order before `Start`, then made available to every function in that module. Initializers may combine literals and earlier module bindings but cannot call functions or perform I/O.
+
+```vanta
+module PlayerController;
+
+let walkSpeed::float = 4.0;
+let runSpeed::float = walkSpeed + 3.0;
+
+func CurrentSpeed(let sprinting::bool)::float {
+    if sprinting { return runSpeed; }
+    return walkSpeed;
+}
+```
+
+Mutable module state is deliberately rejected. Runtime state belongs to the engine context or an explicitly passed value, keeping script behavior predictable.
+
 ## FizzBuzz
 
 ```vanta

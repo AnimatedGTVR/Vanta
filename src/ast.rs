@@ -3,8 +3,16 @@ pub struct Program {
     pub module: String,
     /// Modules named by `@use A.B;`, in source order.
     pub uses: Vec<String>,
+    pub globals: Vec<Global>,
     pub packs: Vec<Pack>,
     pub functions: Vec<Function>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Global {
+    pub name: String,
+    pub ty: Option<Type>,
+    pub value: Expression,
 }
 
 #[derive(Debug, Clone, PartialEq)]

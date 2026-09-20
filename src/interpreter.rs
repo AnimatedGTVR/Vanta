@@ -111,7 +111,14 @@ fn interpret_on_this_thread(
         args,
         sink,
         call_depth: 0,
+        globals: HashMap::new(),
     };
+    interpreter
+        .initialize_globals()
+        .map_err(|halt| match halt {
+            Halt::Error(diagnostic) => diagnostic,
+            Halt::Exit(_) => runtime("module binding initialization cannot exit"),
+        })?;
     let exit_code = match interpreter.call(&modules.entry, "Start", Vec::new()) {
         Ok(_) => 0,
         Err(Halt::Exit(code)) => code,
@@ -206,9 +213,30 @@ struct Interpreter<'a> {
     args: Vec<String>,
     sink: Sink,
     call_depth: usize,
+    globals: HashMap<String, Vec<(String, Value)>>,
 }
 
 impl<'a> Interpreter<'a> {
+    /// Evaluates immutable module bindings once, in source order, before `Start`.
+    fn initialize_globals(&mut self) -> Result<(), Halt> {
+        let modules = self.modules.programs.keys().cloned().collect::<Vec<_>>();
+        for module in modules {
+            let definitions = self.modules.programs[&module].globals.clone();
+            let mut scopes = Scopes::new();
+            let mut values = Vec::new();
+            for global in definitions {
+                let value = self.evaluate(&module, &global.value, &scopes)?;
+                if let Some(ty) = &global.ty {
+                    ensure_type(&value, ty)?;
+                }
+                scopes.define(&global.name, value.clone(), false)?;
+                values.push((global.name, value));
+            }
+            self.globals.insert(module, values);
+        }
+        Ok(())
+    }
+
     fn flush(&mut self) {
         if let Sink::Stdout = self.sink {
             let _ = std::io::stdout().flush();
@@ -296,6 +324,11 @@ impl<'a> Interpreter<'a> {
             .into());
         }
         let mut scopes = Scopes::new();
+        if let Some(globals) = self.globals.get(&target_module) {
+            for (name, value) in globals {
+                scopes.define(name, value.clone(), false)?;
+            }
+        }
         for (parameter, value) in function.parameters.iter().zip(arguments) {
             ensure_type(&value, &parameter.ty)?;
             scopes.define(&parameter.name, value, parameter.mutable)?;
