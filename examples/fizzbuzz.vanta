@@ -1,0 +1,15 @@
+module Main;
+
+func Start()::void {
+    for number in 1..100 {
+        if number % 15 == 0 {
+            emit("FizzBuzz");
+        } else if number % 3 == 0 {
+            emit("Fizz");
+        } else if number % 5 == 0 {
+            emit("Buzz");
+        } else {
+            emit(number);
+        }
+    }
+}
