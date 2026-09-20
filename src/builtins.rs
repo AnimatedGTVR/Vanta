@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -230,6 +231,33 @@ pub fn call(name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>
             String::from_utf8(output.stdout)
                 .map(Value::String)
                 .map_err(|_| Diagnostic::failure(format!("`{name}` produced non-UTF-8 output")))
+        }),
+        "Process.Result" => argv(name, arguments).and_then(|argv| {
+            let output = Command::new(&argv[0])
+                .args(&argv[1..])
+                .stdin(Stdio::null())
+                .output()
+                .map_err(|cause| {
+                    Diagnostic::failure(format!("`{name}` could not start `{}`: {cause}", argv[0]))
+                })?;
+            Ok(Value::Pack {
+                name: "ProcessResult".to_owned(),
+                fields: BTreeMap::from([
+                    (
+                        "code".to_owned(),
+                        Value::Int(i64::from(output.status.code().unwrap_or(-1))),
+                    ),
+                    (
+                        "stderr".to_owned(),
+                        Value::String(String::from_utf8_lossy(&output.stderr).into_owned()),
+                    ),
+                    (
+                        "stdout".to_owned(),
+                        Value::String(String::from_utf8_lossy(&output.stdout).into_owned()),
+                    ),
+                    ("success".to_owned(), Value::Bool(output.status.success())),
+                ]),
+            })
         }),
         "Process.Exists" => unary_string(name, arguments, |program| {
             Ok(Value::Bool(command_exists(program)))
