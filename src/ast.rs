@@ -53,6 +53,8 @@ pub enum Type {
     Void,
     /// `list<T>`
     List(Box<Type>),
+    /// `map<T>` with string keys.
+    Map(Box<Type>),
     Named(String),
 }
 
