@@ -761,6 +761,46 @@ mod tests {
         assert_eq!(run(source).unwrap(), "missing\n");
     }
 
+    #[test]
+    fn parses_typed_key_value_configuration_maps() {
+        let source = r##"
+            module Main;
+            func ReleaseName(let values::map<string>)::string {
+                return Map.GetOr(values, "PRETTY_NAME", "Unknown Linux");
+            }
+            func Start()::void {
+                let values::map<string> = Config.Parse(
+                    "# release metadata\nID=abora\nPRETTY_NAME=\"Abora Everest\"\nanix.desktop='cosmic'"
+                );
+                emit(ReleaseName(values));
+                emit(Map.Get(values, "ID"));
+                emit(Map.Has(values, "anix.desktop"));
+                emit(Map.GetOr(values, "CHANNEL", "stable"));
+                emit(Map.Keys(values));
+            }
+        "##;
+        assert_eq!(
+            run(source).unwrap(),
+            "Abora Everest\nabora\ntrue\nstable\n[ID, PRETTY_NAME, anix.desktop]\n"
+        );
+    }
+
+    #[test]
+    fn config_errors_are_recoverable_and_report_lines() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                ask Config.Parse("GOOD=yes\nbroken line") else {
+                    emit(String.Contains(error, "line 2"));
+                };
+                ask Config.Parse("DUP=one\nDUP=two") else {
+                    emit(String.Contains(error, "repeats key"));
+                };
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "true\ntrue\n");
+    }
+
     #[cfg(unix)]
     #[test]
     fn runs_processes_by_argv_without_a_shell() {
