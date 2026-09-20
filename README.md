@@ -67,7 +67,7 @@ Available APIs:
 | `Path` | `Join`, `Parent`, `FileName`, `Extension`, `IsAbsolute`, `Canonicalize` |
 | `File` | `Exists`, `ReadText`, `WriteText`, `AppendText`, `Copy`, `Remove` |
 | `Dir` | `Exists`, `Create`, `List` |
-| `Process` | `Exec`, `Capture`, `Exists`, `Exit`, `Run`, `Output` |
+| `Process` | `Exec`, `Capture`, `Result`, `Exists`, `Exit`, `Run`, `Output` |
 | `Env` | `Args`, `Has`, `Get` |
 | `System` | `Platform`, `Arch`, `CurrentDir`, `HomeDir` |
 
@@ -76,6 +76,8 @@ Available APIs:
 `emitError(value)` writes a line to standard error, like `emit` does to standard output. `Env.Args()` returns the arguments after the program file (`vanta run tool.vanta channel set edge`), and `Process.Exit(code)` ends the program with that exit status.
 
 For Linux automation, `Path.Join` combines a `list<string>` using the host separator, `Path.Canonicalize` resolves an existing path, and `Process.Exists` searches `PATH` for an executable without invoking a shell. Run `cargo run -- run examples/abora_probe.vanta` for a small Abora-oriented system probe.
+
+`Process.Result([program, ...arguments])` never treats a nonzero exit as a Vanta failure. It returns a `ProcessResult` pack with `success`, `code`, `stdout`, and `stderr` fields so installers and package tools can make their own decision. Failure to start the process remains recoverable through `ask ... else`.
 
 ## Lists and loops
 
