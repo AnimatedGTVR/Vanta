@@ -48,8 +48,11 @@ impl Lexer {
             ')' => TokenKind::RightParen,
             '{' => TokenKind::LeftBrace,
             '}' => TokenKind::RightBrace,
+            '[' => TokenKind::LeftBracket,
+            ']' => TokenKind::RightBracket,
             ',' => TokenKind::Comma,
             ';' => TokenKind::Semicolon,
+            '.' if self.take('.') => TokenKind::DotDot,
             '.' => TokenKind::Dot,
             '+' => TokenKind::Plus,
             '-' => TokenKind::Minus,
@@ -64,6 +67,9 @@ impl Lexer {
             '<' => TokenKind::Less,
             '>' if self.take('=') => TokenKind::GreaterEqual,
             '>' => TokenKind::Greater,
+            '&' if self.take('&') => TokenKind::AmpAmp,
+            '|' if self.take('|') => TokenKind::PipePipe,
+            '@' => return self.directive(line, column),
             '"' => return self.string(line, column),
             c if c.is_ascii_digit() => return self.number(c, line, column),
             c if is_ident_start(c) => return Ok(self.identifier(c, line, column)),
@@ -85,17 +91,46 @@ impl Lexer {
         }
         let kind = match text.as_str() {
             "module" => TokenKind::Module,
+            "pub" => TokenKind::Pub,
             "func" => TokenKind::Func,
             "let" => TokenKind::Let,
             "mut" => TokenKind::Mut,
             "return" => TokenKind::Return,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
+            "for" => TokenKind::For,
+            "in" => TokenKind::In,
+            "ask" => TokenKind::Ask,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             _ => TokenKind::Identifier(text),
         };
         Token { kind, line, column }
+    }
+
+    /// `@use` is the only directive so far.
+    fn directive(&mut self, line: usize, column: usize) -> Result<Token, Diagnostic> {
+        let mut name = String::new();
+        while self.peek().is_some_and(is_ident_continue) {
+            name.push(self.advance());
+        }
+        match name.as_str() {
+            "use" => Ok(Token {
+                kind: TokenKind::Use,
+                line,
+                column,
+            }),
+            "" => Err(Diagnostic::new(
+                "expected a directive name after `@`",
+                line,
+                column,
+            )),
+            other => Err(Diagnostic::new(
+                format!("unknown directive `@{other}`"),
+                line,
+                column,
+            )),
+        }
     }
 
     fn number(&mut self, first: char, line: usize, column: usize) -> Result<Token, Diagnostic> {
@@ -132,13 +167,25 @@ impl Lexer {
                 let escaped = self.peek().ok_or_else(|| {
                     Diagnostic::new("unterminated escape", self.line, self.column)
                 })?;
+                let escape_line = self.line;
+                let escape_column = self.column;
                 self.advance();
                 value.push(match escaped {
                     'n' => '\n',
                     't' => '\t',
+                    'r' => '\r',
+                    '0' => '\0',
                     '"' => '"',
                     '\\' => '\\',
-                    other => other,
+                    other => {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "unknown escape `\\{other}` (use \\n, \\t, \\r, \\0, \\\" or \\\\)"
+                            ),
+                            escape_line,
+                            escape_column,
+                        ));
+                    }
                 });
             } else {
                 value.push(self.advance());

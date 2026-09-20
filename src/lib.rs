@@ -1,20 +1,131 @@
 pub mod ast;
+pub mod builtins;
 pub mod diagnostic;
 pub mod interpreter;
 pub mod lexer;
 pub mod parser;
 pub mod token;
 
-use diagnostic::Diagnostic;
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
+use diagnostic::Diagnostic;
+use interpreter::{BUILTIN_NAMESPACES, Execution, Modules, Sink};
+
+/// Runs a single-file program from source and returns what it emitted.
+/// `@use` needs a file on disk to resolve against; use [`run_file`] for that.
 pub fn run(source: &str) -> Result<String, Diagnostic> {
-    let tokens = lexer::lex(source)?;
-    let program = parser::parse(tokens)?;
-    interpreter::interpret(&program)
+    let program = parse_source(source)?;
+    if let Some(used) = program.uses.first() {
+        return Err(Diagnostic::new(
+            format!("`@use {used}` needs a program file; run it with `vanta run <file>`"),
+            0,
+            0,
+        ));
+    }
+    let modules = Modules {
+        entry: program.module.clone(),
+        programs: HashMap::from([(program.module.clone(), program)]),
+    };
+    let execution = interpreter::interpret(&modules, Vec::new(), Sink::Buffer(String::new()))?;
+    Ok(execution.output)
+}
+
+/// Runs the program in `path` with `args` (what `Env.Args()` returns), streaming `emit`
+/// to stdout. Returns the exit status: 0, or the code given to `Process.Exit`.
+pub fn run_file(path: &Path, args: Vec<String>) -> Result<i32, Diagnostic> {
+    let modules = load(path)?;
+    interpreter::interpret(&modules, args, Sink::Stdout)
+        .map(|Execution { exit_code, .. }| exit_code)
+}
+
+/// Loads `path` and every module it reaches through `@use`. `@use Updater.Guard;`
+/// resolves to `Updater/Guard.vanta` beside the entry file, which must declare
+/// `module Updater.Guard;`. Its `pub` functions are called as `Guard.Name(...)`.
+pub fn load(path: &Path) -> Result<Modules, Diagnostic> {
+    let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let entry = parse_file(path)?;
+    let mut modules = Modules {
+        entry: entry.module.clone(),
+        programs: HashMap::new(),
+    };
+    let mut pending = vec![(entry, path.to_path_buf())];
+    while let Some((program, file)) = pending.pop() {
+        let mut aliases = HashMap::new();
+        for used in &program.uses {
+            let alias = used.rsplit('.').next().unwrap_or(used);
+            if BUILTIN_NAMESPACES.contains(&alias) {
+                return Err(in_file(
+                    &file,
+                    format!("`@use {used}` would hide the standard library's `{alias}`"),
+                ));
+            }
+            if let Some(other) = aliases.insert(alias.to_owned(), used.clone()) {
+                return Err(in_file(
+                    &file,
+                    format!("`@use {other}` and `@use {used}` are both called `{alias}`"),
+                ));
+            }
+            if modules.programs.contains_key(used)
+                || pending.iter().any(|(queued, _)| &queued.module == used)
+                || used == &program.module
+            {
+                continue;
+            }
+            let module_file = root.join(format!("{}.vanta", used.replace('.', "/")));
+            let module = parse_file(&module_file)?;
+            if &module.module != used {
+                return Err(in_file(
+                    &module_file,
+                    format!(
+                        "expected `module {used};` (imported as `@use {used}`), found `module {};`",
+                        module.module
+                    ),
+                ));
+            }
+            pending.push((module, module_file));
+        }
+        if modules.programs.contains_key(&program.module) {
+            return Err(in_file(
+                &file,
+                format!(
+                    "module `{}` is declared by more than one file",
+                    program.module
+                ),
+            ));
+        }
+        modules.programs.insert(program.module.clone(), program);
+    }
+    Ok(modules)
+}
+
+fn parse_source(source: &str) -> Result<ast::Program, Diagnostic> {
+    parser::parse(lexer::lex(source)?)
+}
+
+fn parse_file(path: &Path) -> Result<ast::Program, Diagnostic> {
+    let source = fs::read_to_string(path).map_err(|cause| {
+        Diagnostic::new(
+            format!("could not read `{}`: {cause}", path.display()),
+            0,
+            0,
+        )
+    })?;
+    parse_source(&source).map_err(|diagnostic| Diagnostic {
+        message: format!("{}: {}", path.display(), diagnostic.message),
+        ..diagnostic
+    })
+}
+
+fn in_file(path: &Path, message: String) -> Diagnostic {
+    Diagnostic::new(format!("{}: {message}", path.display()), 0, 0)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::run;
 
     #[test]
@@ -74,5 +185,315 @@ mod tests {
                 .message
                 .contains("maximum call depth")
         );
+    }
+
+    #[test]
+    fn supports_all_comment_forms() {
+        let source = r#"
+            # ordinary line comment
+            #! documentation-style line comment
+            #| block comments
+               may span lines |#
+            module Main;
+            func Start()::void { emit("comments work"); } # trailing comment
+        "#;
+        assert_eq!(run(source).unwrap(), "comments work\n");
+    }
+
+    #[test]
+    fn provides_string_apis() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                let text = String.Trim("  Hello, Vanta!  ");
+                emit(String.Length(text));
+                emit(String.Contains(text, "Vanta"));
+                emit(String.Replace(text, "Vanta", "World"));
+                emit(String.ToUpper("safe"));
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "13\ntrue\nHello, World!\nSAFE\n");
+    }
+
+    #[test]
+    fn provides_environment_apis() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                emit(Env.Has("PATH"));
+                emit(String.Length(Env.Get("PATH")) > 0);
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "true\ntrue\n");
+    }
+
+    #[test]
+    fn provides_file_apis() {
+        let path = std::env::temp_dir().join(format!("vanta-test-{}.txt", std::process::id()));
+        let escaped_path = path.to_string_lossy().replace('\\', "\\\\");
+        let source = format!(
+            r#"module Main;
+                func Start()::void {{
+                    File.WriteText("{escaped_path}", "Vanta");
+                    File.AppendText("{escaped_path}", " works");
+                    emit(File.Exists("{escaped_path}"));
+                    emit(File.ReadText("{escaped_path}"));
+                }}"#
+        );
+        assert_eq!(run(&source).unwrap(), "true\nVanta works\n");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn iterates_ranges_and_lists_with_block_scopes() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                mut total = 0;
+                for i in 0..4 {
+                    let doubled = i * 2;
+                    total = total + doubled;
+                }
+                emit(total);
+                for name in ["edge", "stable"] {
+                    emit("channel {name}");
+                }
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "12\nchannel edge\nchannel stable\n");
+    }
+
+    #[test]
+    fn returns_from_inside_a_loop() {
+        let source = r#"
+            module Main;
+            func FirstLong(let words::list<string>)::string {
+                for word in words {
+                    if String.Length(word) > 3 { return word; }
+                }
+                return "";
+            }
+            func Start()::void { emit(FirstLong(["v4", "edge", "stable"])); }
+        "#;
+        assert_eq!(run(source).unwrap(), "edge\n");
+    }
+
+    #[test]
+    fn supports_lists_indexing_and_list_apis() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                mut refs::list<string> = [];
+                refs = List.Push(refs, "v3.14");
+                refs = List.Push(refs, "v4.0");
+                emit(List.Length(refs));
+                emit(refs[1]);
+                emit(List.Contains(refs, "v3.14"));
+                emit(List.Join(refs, ", "));
+                emit(refs);
+            }
+        "#;
+        assert_eq!(
+            run(source).unwrap(),
+            "2\nv4.0\ntrue\nv3.14, v4.0\n[v3.14, v4.0]\n"
+        );
+    }
+
+    #[test]
+    fn rejects_out_of_range_indexes_as_program_errors() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                let value = ask ["a"][3] else { emit("caught"); return; };
+            }
+        "#;
+        assert!(run(source).unwrap_err().message.contains("out of range"));
+    }
+
+    #[test]
+    fn checks_list_element_types() {
+        let source = "module Main; func Start()::void { let xs::list<int> = [1, \"two\"]; }";
+        assert!(run(source).unwrap_err().message.contains("declared type"));
+    }
+
+    #[test]
+    fn supports_whitespace_escapes() {
+        let source = r#"module Main; func Start()::void { emit(String.Length("a\r\n\t\0b")); emit(String.Replace("x\ry", "\r", "-")); }"#;
+        assert_eq!(run(source).unwrap(), "6\nx-y\n");
+    }
+
+    #[test]
+    fn rejects_unknown_escapes() {
+        let source = r#"module Main; func Start()::void { emit("C:\Users"); }"#;
+        let error = run(source).unwrap_err();
+        assert!(
+            error.message.contains("unknown escape `\\U`"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn compares_strings_by_bytes() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                emit(String.Compare("edge", "main"));
+                emit(String.Compare("v4", "v4"));
+                emit(String.Compare("b", "B"));
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "-1\n0\n1\n");
+    }
+
+    #[test]
+    fn provides_version_parsing_string_apis() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                let parts = String.Split("4.10.2", ".");
+                emit(String.ToInt(parts[1]) + 1);
+                emit(String.IndexOf("v4.1-DEMO2", "-"));
+                emit(String.IndexOf("v4.1", "-"));
+                emit(String.Substring("v4.1-DEMO2", 1, 3));
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "11\n4\n-1\n4.1\n");
+    }
+
+    #[test]
+    fn short_circuits_logical_operators() {
+        let source = r#"
+            module Main;
+            func Boom()::bool { return 1 / 0 == 0; }
+            func Start()::void {
+                emit(false && Boom());
+                emit(true || Boom());
+                emit(true && 2 > 1);
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "false\ntrue\ntrue\n");
+    }
+
+    #[test]
+    fn ask_handles_recoverable_failures() {
+        let source = r#"
+            module Main;
+            func Read(let path::string)::string {
+                let text = ask File.ReadText(path) else {
+                    emit("fallback because: {error}");
+                    return "default";
+                };
+                return text;
+            }
+            func Start()::void {
+                emit(Read("/definitely/not/here.vanta"));
+                ask String.ToInt("nope") else { emit("not a number"); };
+                emit("still running");
+            }
+        "#;
+        let output = run(source).unwrap();
+        assert!(output.starts_with(
+            "fallback because: `File.ReadText` failed for `/definitely/not/here.vanta`"
+        ));
+        assert!(output.ends_with("default\nnot a number\nstill running\n"));
+    }
+
+    #[test]
+    fn ask_binding_else_must_leave_the_function() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                let n = ask String.ToInt("x") else { emit("oops"); };
+                emit(n);
+            }
+        "#;
+        assert!(run(source).unwrap_err().message.contains("must `return`"));
+    }
+
+    #[test]
+    fn ask_does_not_hide_program_errors() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                ask Missing() else { emit("should not run"); };
+            }
+        "#;
+        assert!(
+            run(source)
+                .unwrap_err()
+                .message
+                .contains("unknown function")
+        );
+    }
+
+    #[test]
+    fn unhandled_failures_still_stop_the_program() {
+        let source = "module Main; func Start()::void { emit(String.ToInt(\"x\")); }";
+        let error = run(source).unwrap_err();
+        assert!(error.recoverable && error.message.contains("as an int"));
+    }
+
+    #[test]
+    fn run_rejects_use_without_a_file() {
+        let source = "module Main; @use Updater.Guard; func Start()::void { }";
+        assert!(
+            run(source)
+                .unwrap_err()
+                .message
+                .contains("needs a program file")
+        );
+    }
+
+    #[test]
+    fn provides_directory_and_copy_apis() {
+        let dir = std::env::temp_dir().join(format!("vanta-dir-test-{}", std::process::id()));
+        let escaped = dir.to_string_lossy().replace('\\', "\\\\");
+        let source = format!(
+            r#"module Main;
+                func Start()::void {{
+                    Dir.Create("{escaped}/nested");
+                    File.WriteText("{escaped}/nested/b.txt", "b");
+                    File.Copy("{escaped}/nested/b.txt", "{escaped}/nested/a.txt");
+                    emit(Dir.List("{escaped}/nested"));
+                    File.Remove("{escaped}/nested/b.txt");
+                    File.Remove("{escaped}/nested/b.txt");
+                    emit(Dir.Exists("{escaped}/nested"));
+                    emit(File.Exists("{escaped}/nested/b.txt"));
+                }}"#
+        );
+        assert_eq!(run(&source).unwrap(), "[a.txt, b.txt]\ntrue\nfalse\n");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runs_processes_by_argv_without_a_shell() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                emit(Process.Capture(["printf", "%s", "a; echo injected"]));
+                emit(Process.Exec(["sh", "-c", "exit 4"]));
+                ask Process.Capture(["false"]) else { emit("capture failed"); };
+                ask Process.Exec(["/no/such/program"]) else { emit("could not start"); };
+            }
+        "#;
+        assert_eq!(
+            run(source).unwrap(),
+            "a; echo injected\n4\ncapture failed\ncould not start\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provides_process_apis() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                emit(Process.Output("printf Vanta"));
+                emit(Process.Run("exit 7"));
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "Vanta\n7\n");
     }
 }
