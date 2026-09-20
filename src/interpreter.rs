@@ -10,7 +10,7 @@ const MAX_CALL_DEPTH: usize = 256;
 
 /// Namespaces reserved for the standard library; modules may not use them as names.
 pub const BUILTIN_NAMESPACES: &[&str] = &[
-    "String", "List", "Math", "Path", "File", "Dir", "Process", "Env", "System",
+    "String", "List", "Map", "Config", "Math", "Path", "File", "Dir", "Process", "Env", "System",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +20,7 @@ pub enum Value {
     Bool(bool),
     String(String),
     List(Vec<Value>),
+    Map(BTreeMap<String, Value>),
     Pack {
         name: String,
         fields: BTreeMap<String, Value>,
@@ -57,6 +58,16 @@ impl fmt::Display for Value {
                     write!(f, "{item}")?;
                 }
                 write!(f, "]")
+            }
+            Value::Map(entries) => {
+                write!(f, "{{")?;
+                for (index, (key, value)) in entries.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{key}: {value}")?;
+                }
+                write!(f, "}}")
             }
             Value::Pack { name, fields } => {
                 write!(f, "{name} {{ ")?;
@@ -832,6 +843,9 @@ fn matches_type(value: &Value, ty: &Type) -> bool {
         | (Value::Void, Type::Void) => true,
         (Value::List(items), Type::List(element)) => {
             items.iter().all(|item| matches_type(item, element))
+        }
+        (Value::Map(entries), Type::Map(value)) => {
+            entries.values().all(|item| matches_type(item, value))
         }
         (Value::Pack { name, .. }, Type::Named(expected)) => name == expected,
         _ => false,
