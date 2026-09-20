@@ -37,6 +37,17 @@ Run it with:
 cargo run -- run examples/hello.vanta
 ```
 
+## Documentation
+
+- [Documentation hub](docs/README.md)
+- [Getting started](docs/getting-started.md)
+- [Language reference](docs/language-reference.md)
+- [Standard library](docs/standard-library.md)
+- [Embedding Vanta in Rust](docs/embedding.md)
+- [Using Vanta for Abora and ANIX](docs/abora.md)
+
+The documentation describes the current Rust implementation. Features listed under “planned” are design direction, not syntax accepted by the compiler today.
+
 ## Standard library
 
 Vanta's first system APIs use qualified names:
