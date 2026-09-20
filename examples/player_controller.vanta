@@ -1,0 +1,48 @@
+module PlayerController;
+
+let walkSpeed::float = 4.0;
+let runSpeed::float = 7.0;
+
+pack Vec2 {
+    x::float;
+    y::float;
+}
+
+pack Vec3 {
+    x::float;
+    y::float;
+    z::float;
+}
+
+pack ScriptContext {
+    object::bool;
+}
+
+func TickUpdate(let ctx::ScriptContext, let dt::float)::void {
+    if !ctx.object || dt <= 0.0 || !ctx.HasRigidbody2D() { return; }
+
+    let move3 = ctx.GetMoveInputWASD(0.0, 0.0);
+    let move = Vec2 { x = move3.x, y = move3.z };
+    let length = Math.Sqrt(move.x * move.x + move.y * move.y);
+
+    mut direction = move;
+    if length > 0.0001 {
+        direction = Vec2 { x = move.x / length, y = move.y / length };
+    }
+
+    mut speed = walkSpeed;
+    if ctx.IsSprintDown() { speed = runSpeed; }
+
+    let velocity = Vec2 {
+        x = direction.x * speed,
+        y = direction.y * speed,
+    };
+    ctx.SetRigidbody2DVelocity(velocity);
+    ctx.SetUILabel("Native Vanta 2D Speed: {speed}");
+}
+
+# An engine calls TickUpdate directly. Start only makes this example runnable.
+func Start()::void {
+    let ctx = ScriptContext { object = true };
+    TickUpdate(ctx, 0.016);
+}

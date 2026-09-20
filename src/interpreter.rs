@@ -26,6 +26,20 @@ pub enum Value {
     Void,
 }
 
+/// Engine-provided functions exposed to Vanta. Returning `None` leaves the
+/// name available for normal Vanta function resolution.
+pub trait NativeHost: Send {
+    fn call(&mut self, name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>>;
+}
+
+struct EmptyHost;
+
+impl NativeHost for EmptyHost {
+    fn call(&mut self, _name: &str, _arguments: &[Value]) -> Option<Result<Value, Diagnostic>> {
+        None
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -86,11 +100,24 @@ pub fn interpret(
     args: Vec<String>,
     sink: Sink,
 ) -> Result<Execution, Diagnostic> {
+    let mut host = EmptyHost;
+    interpret_with_host(modules, args, sink, &mut host)
+}
+
+/// Runs `Start` with an engine-defined native function host.
+pub fn interpret_with_host(
+    modules: &Modules,
+    args: Vec<String>,
+    sink: Sink,
+    host: &mut dyn NativeHost,
+) -> Result<Execution, Diagnostic> {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("vanta".into())
             .stack_size(INTERPRETER_STACK_BYTES)
-            .spawn_scoped(scope, || interpret_on_this_thread(modules, args, sink))
+            .spawn_scoped(scope, || {
+                interpret_on_this_thread(modules, args, sink, host)
+            })
             .map_err(|cause| runtime(format!("could not start the interpreter: {cause}")))?
             .join()
             .unwrap_or_else(|_| Err(runtime("the interpreter panicked")))
@@ -101,6 +128,7 @@ fn interpret_on_this_thread(
     modules: &Modules,
     args: Vec<String>,
     sink: Sink,
+    host: &mut dyn NativeHost,
 ) -> Result<Execution, Diagnostic> {
     let entry = &modules.programs[&modules.entry];
     if !entry.functions.iter().any(|f| f.name == "Start") {
@@ -112,6 +140,7 @@ fn interpret_on_this_thread(
         sink,
         call_depth: 0,
         globals: HashMap::new(),
+        host,
     };
     interpreter
         .initialize_globals()
@@ -214,6 +243,7 @@ struct Interpreter<'a> {
     sink: Sink,
     call_depth: usize,
     globals: HashMap<String, Vec<(String, Value)>>,
+    host: &'a mut dyn NativeHost,
 }
 
 impl<'a> Interpreter<'a> {
@@ -305,6 +335,9 @@ impl<'a> Interpreter<'a> {
             _ => {}
         }
         if let Some(result) = builtins::call(name, &arguments) {
+            return result.map_err(Halt::from);
+        }
+        if let Some(result) = self.host.call(name, &arguments) {
             return result.map_err(Halt::from);
         }
 
@@ -690,10 +723,27 @@ impl<'a> Interpreter<'a> {
                 }
             }
             Expression::Call { name, arguments } => {
-                let values = arguments
+                let mut values = arguments
                     .iter()
                     .map(|arg| self.evaluate(module, arg, scopes))
                     .collect::<Result<Vec<_>, _>>()?;
+                if let Some((receiver_path, method)) = name.rsplit_once('.')
+                    && let Ok(receiver) = resolve_value(scopes, receiver_path)
+                {
+                    let Value::Pack {
+                        name: receiver_type,
+                        ..
+                    } = &receiver
+                    else {
+                        return Err(runtime(format!(
+                            "cannot call method `{method}` on a non-pack value"
+                        ))
+                        .into());
+                    };
+                    let target = format!("{receiver_type}.{method}");
+                    values.insert(0, receiver);
+                    return self.call(module, &target, values);
+                }
                 self.call(module, name, values)
             }
         }

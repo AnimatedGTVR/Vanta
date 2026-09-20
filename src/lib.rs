@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 
 use diagnostic::Diagnostic;
-use interpreter::{BUILTIN_NAMESPACES, Execution, Modules, Sink};
+use interpreter::{BUILTIN_NAMESPACES, Execution, Modules, NativeHost, Sink};
 
 /// Runs a single-file program from source and returns what it emitted.
 /// `@use` needs a file on disk to resolve against; use [`run_file`] for that.
@@ -29,6 +29,25 @@ pub fn run(source: &str) -> Result<String, Diagnostic> {
         programs: HashMap::from([(program.module.clone(), program)]),
     };
     let execution = interpreter::interpret(&modules, Vec::new(), Sink::Buffer(String::new()))?;
+    Ok(execution.output)
+}
+
+/// Runs a single-file program with engine-provided native functions.
+pub fn run_with_host(source: &str, host: &mut dyn NativeHost) -> Result<String, Diagnostic> {
+    let program = parse_source(source)?;
+    if let Some(used) = program.uses.first() {
+        return Err(Diagnostic::new(
+            format!("`@use {used}` needs a program file; run it with `vanta run <file>`"),
+            0,
+            0,
+        ));
+    }
+    let modules = Modules {
+        entry: program.module.clone(),
+        programs: HashMap::from([(program.module.clone(), program)]),
+    };
+    let execution =
+        interpreter::interpret_with_host(&modules, Vec::new(), Sink::Buffer(String::new()), host)?;
     Ok(execution.output)
 }
 
@@ -124,9 +143,31 @@ fn in_file(path: &Path, message: String) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
 
-    use super::run;
+    use super::{run, run_with_host};
+    use crate::diagnostic::Diagnostic;
+    use crate::interpreter::{NativeHost, Value};
+
+    struct SprintHost;
+
+    impl NativeHost for SprintHost {
+        fn call(&mut self, name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>> {
+            match name {
+                "ScriptContext.IsSprintDown" if arguments.len() == 1 => Some(Ok(Value::Bool(true))),
+                "ScriptContext.GetMoveInputWASD" if arguments.len() == 3 => Some(Ok(Value::Pack {
+                    name: "Vec3".into(),
+                    fields: BTreeMap::from([
+                        ("x".into(), Value::Float(3.0)),
+                        ("y".into(), Value::Float(0.0)),
+                        ("z".into(), Value::Float(4.0)),
+                    ]),
+                })),
+                _ => None,
+            }
+        }
+    }
 
     #[test]
     fn runs_functions_arithmetic_and_interpolation() {
@@ -209,6 +250,22 @@ mod tests {
             }
         "#;
         assert_eq!(run(source).unwrap(), "4\n7\nwalk=4\n");
+    }
+
+    #[test]
+    fn dispatches_pack_member_calls_to_a_native_host() {
+        let source = r#"
+            module Main;
+            pack Vec3 { x::float; y::float; z::float; }
+            pack ScriptContext { object::bool; }
+            func Start()::void {
+                let ctx = ScriptContext { object = true };
+                let move = ctx.GetMoveInputWASD(0.0, 0.0);
+                emit(move.x);
+                emit(ctx.IsSprintDown());
+            }
+        "#;
+        assert_eq!(run_with_host(source, &mut SprintHost).unwrap(), "3\ntrue\n");
     }
 
     #[test]
