@@ -1,0 +1,20 @@
+module Abora.Release;
+
+func Start()::void {
+    let text = ask File.ReadText("/etc/os-release") else {
+        emitError("Could not read /etc/os-release: {error}");
+        Process.Exit(1);
+    };
+    let release::map<string> = ask Config.Parse(text) else {
+        emitError("Invalid /etc/os-release: {error}");
+        Process.Exit(1);
+    };
+
+    let name = Map.GetOr(release, "PRETTY_NAME", "Unknown Linux");
+    let id = Map.GetOr(release, "ID", "unknown");
+    let version = Map.GetOr(release, "VERSION_ID", "unknown");
+
+    emit("Distribution: {name}");
+    emit("ID: {id}");
+    emit("Version: {version}");
+}

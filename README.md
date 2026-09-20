@@ -63,6 +63,8 @@ Available APIs:
 | --- | --- |
 | `String` | `Length`, `Contains`, `StartsWith`, `EndsWith`, `ToUpper`, `ToLower`, `Trim`, `Replace`, `From`, `Split`, `IndexOf`, `Substring`, `ToInt`, `Compare` |
 | `List` | `Length`, `Push`, `Contains`, `Join` |
+| `Map` | `Has`, `Get`, `GetOr`, `Keys` |
+| `Config` | `Parse` |
 | `Math` | `Sqrt` |
 | `Path` | `Join`, `Parent`, `FileName`, `Extension`, `IsAbsolute`, `Canonicalize` |
 | `File` | `Exists`, `ReadText`, `WriteText`, `AppendText`, `Copy`, `Remove` |
@@ -78,6 +80,16 @@ Available APIs:
 For Linux automation, `Path.Join` combines a `list<string>` using the host separator, `Path.Canonicalize` resolves an existing path, and `Process.Exists` searches `PATH` for an executable without invoking a shell. Run `cargo run -- run examples/abora_probe.vanta` for a small Abora-oriented system probe.
 
 `Process.Result([program, ...arguments])` never treats a nonzero exit as a Vanta failure. It returns a `ProcessResult` pack with `success`, `code`, `stdout`, and `stderr` fields so installers and package tools can make their own decision. Failure to start the process remains recoverable through `ask ... else`.
+
+`Config.Parse(text)` reads line-oriented `key=value` data into a typed `map<string>`. It supports comments, blank lines, dotted ANIX keys, and single- or double-quoted values. Duplicate keys, malformed lines, bad keys, and invalid escapes are recoverable failures with line numbers.
+
+```vanta
+let release::map<string> = Config.Parse(File.ReadText("/etc/os-release"));
+let name = Map.GetOr(release, "PRETTY_NAME", "Unknown Linux");
+emit(name);
+```
+
+Run `cargo run -- run examples/abora_release.vanta` to inspect the current Linux release without `grep`, `sed`, or a shell.
 
 ## Lists and loops
 
