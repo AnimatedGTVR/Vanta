@@ -293,6 +293,35 @@ mod tests {
     }
 
     #[test]
+    fn supports_infinite_loops_with_break_and_skip() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                mut value = 0;
+                loop {
+                    value = value + 1;
+                    if value == 2 { skip; }
+                    emit(value);
+                    if value == 4 { break; }
+                }
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "1\n3\n4\n");
+    }
+
+    #[test]
+    fn returns_from_inside_an_infinite_loop() {
+        let source = r#"
+            module Main;
+            func Find()::int {
+                loop { return 42; }
+            }
+            func Start()::void { emit(Find()); }
+        "#;
+        assert_eq!(run(source).unwrap(), "42\n");
+    }
+
+    #[test]
     fn runs_fizzbuzz_with_modulo_and_else_if() {
         let source = r#"
             module Main;
