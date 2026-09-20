@@ -9,8 +9,9 @@ use crate::diagnostic::Diagnostic;
 const MAX_CALL_DEPTH: usize = 256;
 
 /// Namespaces reserved for the standard library; modules may not use them as names.
-pub const BUILTIN_NAMESPACES: &[&str] =
-    &["String", "List", "Math", "File", "Dir", "Process", "Env"];
+pub const BUILTIN_NAMESPACES: &[&str] = &[
+    "String", "List", "Math", "Path", "File", "Dir", "Process", "Env", "System",
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
