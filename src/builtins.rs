@@ -135,6 +135,34 @@ pub fn call(name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>
                 .map(|parts| Value::String(parts.join(separator))),
             _ => Err(type_error(name, "a list of strings and a string")),
         },
+        "Map.Has" => match arguments {
+            [Value::Map(entries), Value::String(key)] => Ok(Value::Bool(entries.contains_key(key))),
+            _ => Err(type_error(name, "a map and a string key")),
+        },
+        "Map.Get" => match arguments {
+            [Value::Map(entries), Value::String(key)] => entries
+                .get(key)
+                .cloned()
+                .ok_or_else(|| Diagnostic::failure(format!("`{name}`: key `{key}` was not found"))),
+            _ => Err(type_error(name, "a map and a string key")),
+        },
+        "Map.GetOr" => match arguments {
+            [Value::Map(entries), Value::String(key), fallback] => Ok(entries
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| fallback.clone())),
+            _ => Err(type_error(
+                name,
+                "a map, a string key, and a fallback value",
+            )),
+        },
+        "Map.Keys" => match arguments {
+            [Value::Map(entries)] => Ok(Value::List(
+                entries.keys().cloned().map(Value::String).collect(),
+            )),
+            _ => Err(type_error(name, "one map")),
+        },
+        "Config.Parse" => unary_string(name, arguments, parse_key_value),
         "Path.Join" => string_list(name, arguments).map(|parts| {
             Value::String(
                 parts
@@ -357,6 +385,90 @@ fn string_list(name: &str, arguments: &[Value]) -> Result<Vec<String>, Diagnosti
             _ => Err(type_error(name, "one list<string>")),
         })
         .collect()
+}
+
+fn parse_key_value(text: &str) -> Result<Value, Diagnostic> {
+    let mut entries = BTreeMap::new();
+    for (index, raw_line) in text.lines().enumerate() {
+        let line_number = index + 1;
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = line.split_once('=') else {
+            return Err(Diagnostic::failure(format!(
+                "`Config.Parse` line {line_number} needs `key=value`"
+            )));
+        };
+        let key = raw_key.trim();
+        if !valid_config_key(key) {
+            return Err(Diagnostic::failure(format!(
+                "`Config.Parse` line {line_number} has invalid key `{key}`"
+            )));
+        }
+        let value = config_value(raw_value.trim(), line_number)?;
+        if entries
+            .insert(key.to_owned(), Value::String(value))
+            .is_some()
+        {
+            return Err(Diagnostic::failure(format!(
+                "`Config.Parse` line {line_number} repeats key `{key}`"
+            )));
+        }
+    }
+    Ok(Value::Map(entries))
+}
+
+fn valid_config_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+}
+
+fn config_value(value: &str, line: usize) -> Result<String, Diagnostic> {
+    if let Some(quoted) = value.strip_prefix('"') {
+        let Some(inner) = quoted.strip_suffix('"') else {
+            return Err(Diagnostic::failure(format!(
+                "`Config.Parse` line {line} has an unterminated double quote"
+            )));
+        };
+        let mut output = String::new();
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                output.push(ch);
+                continue;
+            }
+            let escaped = chars.next().ok_or_else(|| {
+                Diagnostic::failure(format!(
+                    "`Config.Parse` line {line} has an unterminated escape"
+                ))
+            })?;
+            output.push(match escaped {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '"' => '"',
+                '\\' => '\\',
+                other => {
+                    return Err(Diagnostic::failure(format!(
+                        "`Config.Parse` line {line} has unknown escape `\\{other}`"
+                    )));
+                }
+            });
+        }
+        return Ok(output);
+    }
+    if let Some(quoted) = value.strip_prefix('\'') {
+        return quoted.strip_suffix('\'').map(str::to_owned).ok_or_else(|| {
+            Diagnostic::failure(format!(
+                "`Config.Parse` line {line} has an unterminated single quote"
+            ))
+        });
+    }
+    Ok(value.to_owned())
 }
 
 fn command_exists(program: &str) -> bool {
