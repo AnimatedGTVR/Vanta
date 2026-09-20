@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::Write;
 
@@ -17,6 +17,10 @@ pub enum Value {
     Bool(bool),
     String(String),
     List(Vec<Value>),
+    Pack {
+        name: String,
+        fields: BTreeMap<String, Value>,
+    },
     Void,
 }
 
@@ -35,6 +39,16 @@ impl fmt::Display for Value {
                     write!(f, "{item}")?;
                 }
                 write!(f, "]")
+            }
+            Value::Pack { name, fields } => {
+                write!(f, "{name} {{ ")?;
+                for (index, (field, value)) in fields.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{field} = {value}")?;
+                }
+                write!(f, " }}")
             }
             Value::Void => Ok(()),
         }
@@ -538,10 +552,41 @@ impl<'a> Interpreter<'a> {
                     .map(|item| self.evaluate(module, item, scopes))
                     .collect::<Result<_, _>>()?,
             )),
-            Expression::Variable(name) => scopes
-                .get(name)
-                .map(|b| b.value.clone())
-                .ok_or_else(|| runtime(format!("unknown variable `{name}`")).into()),
+            Expression::Variable(name) => resolve_value(scopes, name).map_err(Halt::from),
+            Expression::Pack { name, fields } => {
+                let definition = self.modules.programs[module]
+                    .packs
+                    .iter()
+                    .find(|pack| pack.name == *name)
+                    .ok_or_else(|| runtime(format!("unknown pack `{name}`")))?;
+                let mut values = BTreeMap::new();
+                for (field, expression) in fields {
+                    let Some(expected) = definition.fields.iter().find(|item| item.name == *field)
+                    else {
+                        return Err(
+                            runtime(format!("unknown field `{field}` for pack `{name}`")).into(),
+                        );
+                    };
+                    let value = self.evaluate(module, expression, scopes)?;
+                    ensure_type(&value, &expected.ty)?;
+                    values.insert(field.clone(), value);
+                }
+                if let Some(missing) = definition
+                    .fields
+                    .iter()
+                    .find(|field| !values.contains_key(&field.name))
+                {
+                    return Err(runtime(format!(
+                        "missing field `{}` for pack `{name}`",
+                        missing.name
+                    ))
+                    .into());
+                }
+                Ok(Value::Pack {
+                    name: name.clone(),
+                    fields: values,
+                })
+            }
             Expression::Unary { operator, operand } => {
                 let value = self.evaluate(module, operand, scopes)?;
                 match (operator, value) {
@@ -620,10 +665,8 @@ fn interpolate(text: &str, scopes: &Scopes) -> Result<String, Diagnostic> {
             .find('}')
             .ok_or_else(|| runtime("unclosed interpolation in string"))?;
         let name = &tail[..end];
-        let value = scopes
-            .get(name)
-            .ok_or_else(|| runtime(format!("unknown interpolation variable `{name}`")))?;
-        output.push_str(&value.value.to_string());
+        let value = resolve_value(scopes, name)?;
+        output.push_str(&value.to_string());
         rest = &tail[end + 1..];
     }
     output.push_str(rest);
@@ -674,8 +717,33 @@ fn matches_type(value: &Value, ty: &Type) -> bool {
         (Value::List(items), Type::List(element)) => {
             items.iter().all(|item| matches_type(item, element))
         }
+        (Value::Pack { name, .. }, Type::Named(expected)) => name == expected,
         _ => false,
     }
+}
+
+/// Resolves a local binding followed by zero or more pack fields.
+fn resolve_value(scopes: &Scopes, path: &str) -> Result<Value, Diagnostic> {
+    let mut segments = path.split('.');
+    let root = segments.next().unwrap_or(path);
+    let mut value = scopes
+        .get(root)
+        .map(|binding| binding.value.clone())
+        .ok_or_else(|| runtime(format!("unknown variable `{root}`")))?;
+    for field in segments {
+        value = match value {
+            Value::Pack { name, fields } => fields
+                .get(field)
+                .cloned()
+                .ok_or_else(|| runtime(format!("pack `{name}` has no field `{field}`")))?,
+            _ => {
+                return Err(runtime(format!(
+                    "cannot access field `{field}` on a non-pack value"
+                )));
+            }
+        };
+    }
+    Ok(value)
 }
 
 fn runtime(message: impl Into<String>) -> Diagnostic {
