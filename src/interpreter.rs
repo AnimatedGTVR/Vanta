@@ -126,6 +126,8 @@ impl From<Diagnostic> for Halt {
 enum Flow {
     Normal,
     Return(Value),
+    Break,
+    Skip,
 }
 
 #[derive(Clone)]
@@ -284,6 +286,9 @@ impl<'a> Interpreter<'a> {
         let result = match self.execute_block(&target_module, &function.body, &mut scopes)? {
             Flow::Return(value) => value,
             Flow::Normal => Value::Void,
+            Flow::Break | Flow::Skip => {
+                return Err(runtime("loop control escaped its loop").into());
+            }
         };
         ensure_type(&result, &function.return_type)?;
         Ok(result)
@@ -374,44 +379,89 @@ impl<'a> Interpreter<'a> {
                         Value::Bool(false) => else_body,
                         _ => return Err(runtime("if condition must be `bool`").into()),
                     };
-                    if let Flow::Return(value) = self.execute_block(module, branch, scopes)? {
-                        return Ok(Flow::Return(value));
+                    let flow = self.execute_block(module, branch, scopes)?;
+                    if !matches!(flow, Flow::Normal) {
+                        return Ok(flow);
                     }
                 }
                 Statement::For {
                     name,
                     iterable,
                     body,
-                } => {
-                    let items = match iterable {
-                        Iterable::Range(start, end) => {
-                            match (
-                                self.evaluate(module, start, scopes)?,
-                                self.evaluate(module, end, scopes)?,
-                            ) {
-                                (Value::Int(start), Value::Int(end)) => {
-                                    (start..end).map(Value::Int).collect()
+                } => match iterable {
+                    Iterable::Range { start, end, step } => {
+                        let (Value::Int(start), Value::Int(end)) = (
+                            self.evaluate(module, start, scopes)?,
+                            self.evaluate(module, end, scopes)?,
+                        ) else {
+                            return Err(runtime("a `for` range needs int bounds").into());
+                        };
+                        let magnitude = match step {
+                            Some(step) => match self.evaluate(module, step, scopes)? {
+                                Value::Int(value) if value > 0 => value,
+                                Value::Int(_) => {
+                                    return Err(runtime(
+                                        "a range `by` step must be greater than zero",
+                                    )
+                                    .into());
                                 }
-                                _ => return Err(runtime("a `for` range needs int bounds").into()),
+                                _ => return Err(runtime("a range `by` step must be an int").into()),
+                            },
+                            None => 1,
+                        };
+                        let step = if start <= end { magnitude } else { -magnitude };
+                        let mut current = start;
+                        loop {
+                            if (step > 0 && current > end) || (step < 0 && current < end) {
+                                break;
                             }
-                        }
-                        Iterable::List(list) => match self.evaluate(module, list, scopes)? {
-                            Value::List(items) => items,
-                            _ => return Err(runtime("`for ... in` needs a list or a range").into()),
-                        },
-                    };
-                    for item in items {
-                        scopes.frames.push(HashMap::new());
-                        let flow = scopes
-                            .define(name, item, false)
-                            .map_err(Halt::from)
-                            .and_then(|()| self.execute_block(module, body, scopes));
-                        scopes.frames.pop();
-                        if let Flow::Return(value) = flow? {
-                            return Ok(Flow::Return(value));
+                            match self.execute_loop_iteration(
+                                module,
+                                name,
+                                Value::Int(current),
+                                body,
+                                scopes,
+                            )? {
+                                Flow::Return(value) => return Ok(Flow::Return(value)),
+                                Flow::Break => break,
+                                Flow::Normal | Flow::Skip => {}
+                            }
+                            if current == end {
+                                break;
+                            }
+                            let Some(next) = current.checked_add(step) else {
+                                break;
+                            };
+                            current = next;
                         }
                     }
-                }
+                    Iterable::List(list) => {
+                        let Value::List(items) = self.evaluate(module, list, scopes)? else {
+                            return Err(runtime("`for ... in` needs a list or a range").into());
+                        };
+                        for item in items {
+                            match self.execute_loop_iteration(module, name, item, body, scopes)? {
+                                Flow::Return(value) => return Ok(Flow::Return(value)),
+                                Flow::Break => break,
+                                Flow::Normal | Flow::Skip => {}
+                            }
+                        }
+                    }
+                },
+                Statement::While { condition, body } => loop {
+                    match self.evaluate(module, condition, scopes)? {
+                        Value::Bool(true) => {}
+                        Value::Bool(false) => break,
+                        _ => return Err(runtime("while condition must be `bool`").into()),
+                    }
+                    match self.execute_block(module, body, scopes)? {
+                        Flow::Return(value) => return Ok(Flow::Return(value)),
+                        Flow::Break => break,
+                        Flow::Normal | Flow::Skip => {}
+                    }
+                },
+                Statement::Break => return Ok(Flow::Break),
+                Statement::Skip => return Ok(Flow::Skip),
                 Statement::Ask {
                     binding,
                     value,
@@ -441,6 +491,8 @@ impl<'a> Interpreter<'a> {
                                 .into());
                             }
                             Flow::Normal => {}
+                            Flow::Break => return Ok(Flow::Break),
+                            Flow::Skip => return Ok(Flow::Skip),
                         }
                     }
                     Err(halt) => return Err(halt),
@@ -451,6 +503,23 @@ impl<'a> Interpreter<'a> {
             }
         }
         Ok(Flow::Normal)
+    }
+
+    fn execute_loop_iteration(
+        &mut self,
+        module: &str,
+        name: &str,
+        item: Value,
+        body: &[Statement],
+        scopes: &mut Scopes,
+    ) -> Result<Flow, Halt> {
+        scopes.frames.push(HashMap::new());
+        let flow = scopes
+            .define(name, item, false)
+            .map_err(Halt::from)
+            .and_then(|()| self.execute_block(module, body, scopes));
+        scopes.frames.pop();
+        flow
     }
 
     fn evaluate(
@@ -570,6 +639,8 @@ fn binary(left: Value, operator: BinaryOperator, right: Value) -> Result<Value, 
         (Value::Int(a), Multiply, Value::Int(b)) => checked_integer(a.checked_mul(b)),
         (Value::Int(_), Divide, Value::Int(0)) => Err(runtime("division by zero")),
         (Value::Int(a), Divide, Value::Int(b)) => checked_integer(a.checked_div(b)),
+        (Value::Int(_), Remainder, Value::Int(0)) => Err(runtime("remainder by zero")),
+        (Value::Int(a), Remainder, Value::Int(b)) => checked_integer(a.checked_rem(b)),
         (a, Equal, b) => Ok(Value::Bool(a == b)),
         (a, NotEqual, b) => Ok(Value::Bool(a != b)),
         (Value::Int(a), Less, Value::Int(b)) => Ok(Value::Bool(a < b)),

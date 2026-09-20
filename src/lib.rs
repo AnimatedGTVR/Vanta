@@ -260,7 +260,85 @@ mod tests {
                 }
             }
         "#;
-        assert_eq!(run(source).unwrap(), "12\nchannel edge\nchannel stable\n");
+        assert_eq!(run(source).unwrap(), "20\nchannel edge\nchannel stable\n");
+    }
+
+    #[test]
+    fn supports_inclusive_reverse_and_stepped_ranges() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                for value in 1..5 by 2 { emit(value); }
+                for value in 3..1 { emit(value); }
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "1\n3\n5\n3\n2\n1\n");
+    }
+
+    #[test]
+    fn supports_while_break_and_skip() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                mut value = 0;
+                while value < 6 {
+                    value = value + 1;
+                    if value == 2 { skip; }
+                    if value == 5 { break; }
+                    emit(value);
+                }
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "1\n3\n4\n");
+    }
+
+    #[test]
+    fn runs_fizzbuzz_with_modulo_and_else_if() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                for number in 1..15 {
+                    if number % 15 == 0 {
+                        emit("FizzBuzz");
+                    } else if number % 3 == 0 {
+                        emit("Fizz");
+                    } else if number % 5 == 0 {
+                        emit("Buzz");
+                    } else {
+                        emit(number);
+                    }
+                }
+            }
+        "#;
+        assert_eq!(
+            run(source).unwrap(),
+            "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_loop_control_and_steps() {
+        let outside = "module Main; func Start()::void { break; }";
+        assert!(run(outside).unwrap_err().message.contains("inside a loop"));
+
+        let zero_step = "module Main; func Start()::void { for i in 1..3 by 0 { emit(i); } }";
+        assert!(
+            run(zero_step)
+                .unwrap_err()
+                .message
+                .contains("greater than zero")
+        );
+    }
+
+    #[test]
+    fn reports_remainder_by_zero() {
+        let source = "module Main; func Start()::void { emit(10 % 0); }";
+        assert!(
+            run(source)
+                .unwrap_err()
+                .message
+                .contains("remainder by zero")
+        );
     }
 
     #[test]

@@ -57,6 +57,12 @@ pub enum Statement {
         iterable: Iterable,
         body: Vec<Statement>,
     },
+    While {
+        condition: Expression,
+        body: Vec<Statement>,
+    },
+    Break,
+    Skip,
     /// `let name = ask Expr else { };` (binding: the else block must return or exit)
     /// or `ask Expr else { };` (statement: the else block may continue).
     Ask {
@@ -76,8 +82,12 @@ pub struct AskBinding {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Iterable {
-    /// `start..end`, end exclusive
-    Range(Expression, Expression),
+    /// Inclusive `start..end`, optionally with a positive `by` step magnitude.
+    Range {
+        start: Expression,
+        end: Expression,
+        step: Option<Expression>,
+    },
     List(Expression),
 }
 
@@ -125,6 +135,7 @@ pub enum BinaryOperator {
     Subtract,
     Multiply,
     Divide,
+    Remainder,
     Equal,
     NotEqual,
     Less,

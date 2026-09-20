@@ -3,12 +3,18 @@ use crate::diagnostic::Diagnostic;
 use crate::token::{Token, TokenKind};
 
 pub fn parse(tokens: Vec<Token>) -> Result<Program, Diagnostic> {
-    Parser { tokens, current: 0 }.program()
+    Parser {
+        tokens,
+        current: 0,
+        loop_depth: 0,
+    }
+    .program()
 }
 
 struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    loop_depth: usize,
 }
 
 impl Parser {
@@ -117,16 +123,49 @@ impl Parser {
             self.expect_simple(TokenKind::In, "expected `in` after loop variable")?;
             let first = self.expression()?;
             let iterable = if self.take_simple(TokenKind::DotDot) {
-                Iterable::Range(first, self.expression()?)
+                let end = self.expression()?;
+                let step = if self.take_simple(TokenKind::By) {
+                    Some(self.expression()?)
+                } else {
+                    None
+                };
+                Iterable::Range {
+                    start: first,
+                    end,
+                    step,
+                }
             } else {
                 Iterable::List(first)
             };
+            self.loop_depth += 1;
             let body = self.block()?;
+            self.loop_depth -= 1;
             return Ok(Statement::For {
                 name,
                 iterable,
                 body,
             });
+        }
+        if self.take_simple(TokenKind::While) {
+            let condition = self.expression()?;
+            self.loop_depth += 1;
+            let body = self.block()?;
+            self.loop_depth -= 1;
+            return Ok(Statement::While { condition, body });
+        }
+        if self.take_simple(TokenKind::Break) {
+            if self.loop_depth == 0 {
+                return Err(self.error("`break` may only be used inside a loop"));
+            }
+            self.expect_simple(TokenKind::Semicolon, "expected `;` after `break`")?;
+            return Ok(Statement::Break);
+        }
+        if self.take_simple(TokenKind::Skip) {
+            if self.loop_depth == 0 {
+                return Err(self.error("`skip` may only be used inside a loop"));
+            }
+            self.expect_simple(TokenKind::Semicolon, "expected `;` after `skip`")?;
+            return Ok(Statement::Skip);
         }
         if self.take_simple(TokenKind::Ask) {
             let (value, else_body) = self.ask_tail()?;
@@ -137,18 +176,7 @@ impl Parser {
             });
         }
         if self.take_simple(TokenKind::If) {
-            let condition = self.expression()?;
-            let then_body = self.block()?;
-            let else_body = if self.take_simple(TokenKind::Else) {
-                self.block()?
-            } else {
-                Vec::new()
-            };
-            return Ok(Statement::If {
-                condition,
-                then_body,
-                else_body,
-            });
+            return self.if_statement();
         }
         match self.peek().kind.clone() {
             TokenKind::Identifier(name)
@@ -167,6 +195,25 @@ impl Parser {
         let expression = self.expression()?;
         self.expect_simple(TokenKind::Semicolon, "expected `;` after expression")?;
         Ok(Statement::Expression(expression))
+    }
+
+    fn if_statement(&mut self) -> Result<Statement, Diagnostic> {
+        let condition = self.expression()?;
+        let then_body = self.block()?;
+        let else_body = if self.take_simple(TokenKind::Else) {
+            if self.take_simple(TokenKind::If) {
+                vec![self.if_statement()?]
+            } else {
+                self.block()?
+            }
+        } else {
+            Vec::new()
+        };
+        Ok(Statement::If {
+            condition,
+            then_body,
+            else_body,
+        })
     }
 
     fn binding(&mut self, mutable: bool) -> Result<Statement, Diagnostic> {
@@ -281,6 +328,7 @@ impl Parser {
         while let Some(op) = self.take_binary(&[
             (TokenKind::Star, BinaryOperator::Multiply),
             (TokenKind::Slash, BinaryOperator::Divide),
+            (TokenKind::Percent, BinaryOperator::Remainder),
         ]) {
             expr = Expression::Binary {
                 left: Box::new(expr),
