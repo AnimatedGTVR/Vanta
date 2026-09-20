@@ -13,6 +13,7 @@ pub enum TokenKind {
     In,
     By,
     While,
+    Loop,
     Break,
     Skip,
     Ask,
