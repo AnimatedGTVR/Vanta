@@ -39,6 +39,7 @@ pub struct Parameter {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Int,
+    Float,
     Bool,
     String,
     Void,
@@ -111,6 +112,7 @@ pub enum Iterable {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Integer(i64),
+    Float(f64),
     Bool(bool),
     String(String),
     List(Vec<Expression>),

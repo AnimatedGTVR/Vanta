@@ -63,6 +63,7 @@ Available APIs:
 | --- | --- |
 | `String` | `Length`, `Contains`, `StartsWith`, `EndsWith`, `ToUpper`, `ToLower`, `Trim`, `Replace`, `From`, `Split`, `IndexOf`, `Substring`, `ToInt`, `Compare` |
 | `List` | `Length`, `Push`, `Contains`, `Join` |
+| `Math` | `Sqrt` |
 | `File` | `Exists`, `ReadText`, `WriteText`, `AppendText`, `Copy`, `Remove` |
 | `Dir` | `Exists`, `Create`, `List` |
 | `Process` | `Exec`, `Capture`, `Exit`, `Run`, `Output` |
@@ -119,6 +120,18 @@ loop {
 ```
 
 `else if` chains are supported, and `%` reports remainder-by-zero and integer-overflow errors as diagnostics.
+
+## Floating-point numbers
+
+The `float` type supports decimal literals, arithmetic, remainder, comparisons, typed parameters and returns, lists, and pack fields. Float operations reject division by zero and non-finite results instead of silently producing infinities or NaN.
+
+```vanta
+func Length(let x::float, let y::float)::float {
+    return Math.Sqrt(x * x + y * y);
+}
+
+let speed::float = Length(3.0, 4.0);
+```
 
 ## FizzBuzz
 

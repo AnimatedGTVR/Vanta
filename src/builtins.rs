@@ -99,6 +99,11 @@ pub fn call(name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>
                 Diagnostic::failure(format!("`{name}` could not read `{text}` as an int"))
             })
         }),
+        "Math.Sqrt" => match arguments {
+            [Value::Float(value)] if *value >= 0.0 => Ok(Value::Float(value.sqrt())),
+            [Value::Float(_)] => Err(error("`Math.Sqrt` needs a non-negative float")),
+            _ => Err(type_error(name, "one float")),
+        },
         "List.Length" => match arguments {
             [Value::List(items)] => i64::try_from(items.len())
                 .map(Value::Int)

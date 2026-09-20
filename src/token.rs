@@ -22,6 +22,7 @@ pub enum TokenKind {
     False,
     Identifier(String),
     Integer(i64),
+    Float(f64),
     String(String),
     LeftParen,
     RightParen,

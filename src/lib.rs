@@ -173,6 +173,55 @@ mod tests {
     }
 
     #[test]
+    fn supports_float_math_comparisons_and_types() {
+        let source = r#"
+            module Main;
+            func Length(let x::float, let y::float)::float {
+                return Math.Sqrt(x * x + y * y);
+            }
+            func Start()::void {
+                let length::float = Length(3.0, 4.0);
+                emit(length);
+                emit(length > 4.999);
+                emit(-1.5 + 2.0);
+                emit(5.5 % 2.0);
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "5\ntrue\n0.5\n1.5\n");
+    }
+
+    #[test]
+    fn keeps_float_literals_distinct_from_ranges() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                emit(1.25);
+                for value in 1..2 { emit(value); }
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "1.25\n1\n2\n");
+    }
+
+    #[test]
+    fn rejects_invalid_float_operations() {
+        let division = "module Main; func Start()::void { emit(1.0 / 0.0); }";
+        assert!(
+            run(division)
+                .unwrap_err()
+                .message
+                .contains("division by zero")
+        );
+
+        let square_root = "module Main; func Start()::void { emit(Math.Sqrt(-1.0)); }";
+        assert!(
+            run(square_root)
+                .unwrap_err()
+                .message
+                .contains("non-negative")
+        );
+    }
+
+    #[test]
     fn limits_recursive_calls() {
         let source = r#"
             module Main;
