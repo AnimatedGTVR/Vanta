@@ -1,5 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::diagnostic::Diagnostic;
@@ -133,6 +134,43 @@ pub fn call(name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>
                 .map(|parts| Value::String(parts.join(separator))),
             _ => Err(type_error(name, "a list of strings and a string")),
         },
+        "Path.Join" => string_list(name, arguments).map(|parts| {
+            Value::String(
+                parts
+                    .into_iter()
+                    .collect::<PathBuf>()
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }),
+        "Path.Parent" => unary_string(name, arguments, |path| {
+            Path::new(path)
+                .parent()
+                .map(|parent| Value::String(parent.to_string_lossy().into_owned()))
+                .ok_or_else(|| Diagnostic::failure(format!("`{name}`: `{path}` has no parent")))
+        }),
+        "Path.FileName" => unary_string(name, arguments, |path| {
+            Path::new(path)
+                .file_name()
+                .map(|part| Value::String(part.to_string_lossy().into_owned()))
+                .ok_or_else(|| Diagnostic::failure(format!("`{name}`: `{path}` has no file name")))
+        }),
+        "Path.Extension" => unary_string(name, arguments, |path| {
+            Ok(Value::String(
+                Path::new(path)
+                    .extension()
+                    .map(|part| part.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ))
+        }),
+        "Path.IsAbsolute" => unary_string(name, arguments, |path| {
+            Ok(Value::Bool(Path::new(path).is_absolute()))
+        }),
+        "Path.Canonicalize" => unary_string(name, arguments, |path| {
+            fs::canonicalize(path)
+                .map(|path| Value::String(path.to_string_lossy().into_owned()))
+                .map_err(|cause| io_error(name, path, cause))
+        }),
         "Dir.Exists" => unary_string(name, arguments, |path| {
             Ok(Value::Bool(std::path::Path::new(path).is_dir()))
         }),
@@ -193,6 +231,9 @@ pub fn call(name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>
                 .map(Value::String)
                 .map_err(|_| Diagnostic::failure(format!("`{name}` produced non-UTF-8 output")))
         }),
+        "Process.Exists" => unary_string(name, arguments, |program| {
+            Ok(Value::Bool(command_exists(program)))
+        }),
         "File.Exists" => unary_string(name, arguments, |path| {
             Ok(Value::Bool(std::path::Path::new(path).exists()))
         }),
@@ -244,9 +285,73 @@ pub fn call(name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>
                 Diagnostic::failure(format!("`{name}` could not read `{key}`: {cause}"))
             })
         }),
+        "System.Platform" => no_arguments(name, arguments, || {
+            Ok(Value::String(std::env::consts::OS.to_owned()))
+        }),
+        "System.Arch" => no_arguments(name, arguments, || {
+            Ok(Value::String(std::env::consts::ARCH.to_owned()))
+        }),
+        "System.CurrentDir" => no_arguments(name, arguments, || {
+            std::env::current_dir()
+                .map(|path| Value::String(path.to_string_lossy().into_owned()))
+                .map_err(|cause| Diagnostic::failure(format!("`{name}` failed: {cause}")))
+        }),
+        "System.HomeDir" => no_arguments(name, arguments, || {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .map(|path| Value::String(PathBuf::from(path).to_string_lossy().into_owned()))
+                .ok_or_else(|| {
+                    Diagnostic::failure(format!("`{name}` could not find the home directory"))
+                })
+        }),
         _ => return None,
     };
     Some(result)
+}
+
+fn no_arguments(
+    name: &str,
+    arguments: &[Value],
+    function: impl FnOnce() -> Result<Value, Diagnostic>,
+) -> Result<Value, Diagnostic> {
+    arity(name, arguments, 0)?;
+    function()
+}
+
+fn string_list(name: &str, arguments: &[Value]) -> Result<Vec<String>, Diagnostic> {
+    arity(name, arguments, 1)?;
+    let Value::List(items) = &arguments[0] else {
+        return Err(type_error(name, "one list<string>"));
+    };
+    items
+        .iter()
+        .map(|item| match item {
+            Value::String(value) => Ok(value.clone()),
+            _ => Err(type_error(name, "one list<string>")),
+        })
+        .collect()
+}
+
+fn command_exists(program: &str) -> bool {
+    let path = Path::new(program);
+    if path.components().count() > 1 {
+        return executable(path);
+    }
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|directory| executable(&directory.join(program)))
+    })
+}
+
+#[cfg(unix)]
+fn executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn unary_string(
