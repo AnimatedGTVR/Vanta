@@ -724,6 +724,43 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn provides_abora_system_and_path_apis() {
+        let executable = std::env::current_exe().unwrap();
+        let escaped = executable.to_string_lossy().replace('\\', "\\\\");
+        let source = format!(
+            r#"module Main;
+                func Start()::void {{
+                    let joined = Path.Join(["var", "lib", "abora", "state.json"]);
+                    emit(Path.FileName(joined));
+                    emit(Path.Extension(joined));
+                    emit(Path.IsAbsolute(joined));
+                    emit(String.Length(System.Platform()) > 0);
+                    emit(String.Length(System.Arch()) > 0);
+                    emit(Path.IsAbsolute(System.CurrentDir()));
+                    emit(Path.IsAbsolute(System.HomeDir()));
+                    emit(Process.Exists("{escaped}"));
+                }}"#
+        );
+        assert_eq!(
+            run(&source).unwrap(),
+            "state.json\njson\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+        );
+    }
+
+    #[test]
+    fn path_failures_work_with_ask() {
+        let source = r#"
+            module Main;
+            func Start()::void {
+                ask Path.Canonicalize("/definitely/not/a/vanta/path") else {
+                    emit("missing");
+                };
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "missing\n");
+    }
+
     #[cfg(unix)]
     #[test]
     fn runs_processes_by_argv_without_a_shell() {
