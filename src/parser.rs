@@ -434,6 +434,7 @@ impl Parser {
         let token = self.advance().clone();
         match token.kind {
             TokenKind::Integer(value) => Ok(Expression::Integer(value)),
+            TokenKind::Float(value) => Ok(Expression::Float(value)),
             TokenKind::String(value) => Ok(Expression::String(value)),
             TokenKind::True => Ok(Expression::Bool(true)),
             TokenKind::False => Ok(Expression::Bool(false)),
@@ -495,6 +496,7 @@ impl Parser {
         match token.kind {
             TokenKind::Identifier(name) => match name.as_str() {
                 "int" => Ok(Type::Int),
+                "float" => Ok(Type::Float),
                 "bool" => Ok(Type::Bool),
                 "string" => Ok(Type::String),
                 "void" => Ok(Type::Void),
