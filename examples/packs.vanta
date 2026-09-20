@@ -1,0 +1,26 @@
+module Main;
+
+pack Position {
+    x::int;
+    y::int;
+}
+
+pack Player {
+    name::string;
+    health::int;
+    position::Position;
+}
+
+func Describe(let player::Player)::string {
+    return "{player.name} has {player.health} health at {player.position.x},{player.position.y}";
+}
+
+func Start()::void {
+    let player::Player = Player {
+        name = "Nova",
+        health = 100,
+        position = Position { x = 4, y = 9 },
+    };
+
+    emit(Describe(player));
+}
