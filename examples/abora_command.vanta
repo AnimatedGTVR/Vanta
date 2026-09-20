@@ -1,0 +1,17 @@
+module Abora.Command;
+
+func Start()::void {
+    if !Process.Exists("sh") {
+        emitError("This Abora tool needs a POSIX shell.");
+        Process.Exit(1);
+    }
+
+    let result = Process.Result(["sh", "-c", "printf 'checking Abora'; printf 'warning' >&2; exit 3"]);
+    let code = result.code;
+    let stdout = String.Trim(result.stdout);
+    let stderr = String.Trim(result.stderr);
+
+    emit("success={result.success} code={code}");
+    emit("stdout={stdout}");
+    emit("stderr={stderr}");
+}
