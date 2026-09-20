@@ -1,0 +1,23 @@
+module Abora.Probe;
+
+func Start()::void {
+    let platform = System.Platform();
+    let arch = System.Arch();
+    let current = System.CurrentDir();
+    let home = System.HomeDir();
+    let config = Path.Join([home, ".config", "abora"]);
+
+    emit("Abora host: {platform}/{arch}");
+    emit("Working directory: {current}");
+    emit("Configuration: {config}");
+
+    if Process.Exists("nix") {
+        emit("Nix tooling: available");
+    } else {
+        emit("Nix tooling: unavailable");
+    }
+
+    if File.Exists("/etc/os-release") {
+        emit("Linux release metadata: available");
+    }
+}
