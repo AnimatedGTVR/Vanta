@@ -92,7 +92,45 @@ func Start()::void {
 }
 ```
 
-`for name in start..end` counts up to, but not including, `end`. Every block has its own scope, so a `let` inside a loop body is fresh on each pass. `&&` and `||` only evaluate their right side when it matters.
+`for name in start..end` includes both bounds. Descending ranges such as `10..1` reverse automatically, and `1..10 by 2` uses a custom positive step. Every block has its own scope, so a `let` inside a loop body is fresh on each pass. `&&` and `||` only evaluate their right side when it matters.
+
+## Advanced control flow
+
+Vanta supports `while`, `break`, and `skip` (`skip` begins the next loop iteration):
+
+```vanta
+mut value = 0;
+while value < 10 {
+    value = value + 1;
+    if value % 2 == 0 { skip; }
+    if value > 7 { break; }
+    emit(value);
+}
+```
+
+`else if` chains are supported, and `%` reports remainder-by-zero and integer-overflow errors as diagnostics.
+
+## FizzBuzz
+
+```vanta
+module Main;
+
+func Start()::void {
+    for number in 1..100 {
+        if number % 15 == 0 {
+            emit("FizzBuzz");
+        } else if number % 3 == 0 {
+            emit("Fizz");
+        } else if number % 5 == 0 {
+            emit("Buzz");
+        } else {
+            emit(number);
+        }
+    }
+}
+```
+
+Run it with `cargo run -- run examples/fizzbuzz.vanta`.
 
 ## Handling failures
 
@@ -141,7 +179,7 @@ String literals support the escapes `\n`, `\t`, `\r`, `\0`, `\"` and `\\`, and i
 
 ## Current Status
 
-Vanta is in early development. The Rust reference implementation currently supports modules and `@use` imports, `pub` and private functions, typed parameters and returns, immutable and mutable bindings, primitive values and `list<T>`, expressions with short-circuit `&&`/`||`, qualified function calls, conditionals, `for` loops over ranges and lists, `ask ... else` failure handling, comments, string interpolation, streaming output, program arguments and exit status, file and directory access, environment access, and process execution.
+Vanta is in early development. The Rust reference implementation currently supports modules and `@use` imports, `pub` and private functions, typed parameters and returns, immutable and mutable bindings, primitive values and `list<T>`, expressions with short-circuit `&&`/`||`, qualified function calls, `if`/`else if`, inclusive and stepped ranges, `for`/`while`, `break`/`skip`, `ask ... else` failure handling, comments, string interpolation, streaming output, program arguments and exit status, file and directory access, environment access, and process execution.
 
 The next milestones are static type checking, source-span diagnostics, `pack` and `pick`, explicit error handling, and native code generation.
 
