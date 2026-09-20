@@ -151,6 +151,19 @@ func CurrentSpeed(let sprinting::bool)::float {
 
 Mutable module state is deliberately rejected. Runtime state belongs to the engine context or an explicitly passed value, keeping script behavior predictable.
 
+## Native engine hosts and member calls
+
+Embedders implement Rust's `NativeHost` trait to expose engine operations. A member call such as `ctx.IsSprintDown()` dispatches as `ScriptContext.IsSprintDown`, with `ctx` passed as the first argument. Built-in calls such as `Math.Sqrt(...)` continue to use their normal namespace.
+
+```vanta
+let move = ctx.GetMoveInputWASD(0.0, 0.0);
+if ctx.IsSprintDown() {
+    ctx.SetUILabel("Sprinting");
+}
+```
+
+The interpreter contains no ModuCPP-specific state: the engine owns objects, physics, input, and UI while Vanta supplies control flow and calculations. See `examples/player_controller.vanta` and run its mock embedding with `cargo run --example embed_player_controller`.
+
 ## FizzBuzz
 
 ```vanta
