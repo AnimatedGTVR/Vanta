@@ -142,6 +142,33 @@ func Start()::void {
 
 Run it with `cargo run -- run examples/fizzbuzz.vanta`.
 
+## Pack types
+
+`pack` defines a product type: every value contains every declared field. Pack names begin with an uppercase letter, construction names each field, and `.` reads fields (including nested fields).
+
+```vanta
+pack Position {
+    x::int;
+    y::int;
+}
+
+pack Player {
+    name::string;
+    position::Position;
+}
+
+let player::Player = Player {
+    name = "Nova",
+    position = Position { x = 4, y = 9 },
+};
+
+emit("{player.name}: {player.position.x}");
+```
+
+Construction rejects missing, unknown, duplicate, or wrongly typed fields. Pack values participate in equality and can be passed to and returned from typed functions. Fields are read-only in this milestone; pack methods, private fields, `init`, and field mutation come later.
+
+Run the complete example with `cargo run -- run examples/packs.vanta`.
+
 ## Handling failures
 
 Standard-library calls that touch the outside world (files, processes, environment, number parsing) can fail. A failure stops the program unless it is acknowledged with `ask ... else`:
@@ -191,6 +218,6 @@ String literals support the escapes `\n`, `\t`, `\r`, `\0`, `\"` and `\\`, and i
 
 Vanta is in early development. The Rust reference implementation currently supports modules and `@use` imports, `pub` and private functions, typed parameters and returns, immutable and mutable bindings, primitive values and `list<T>`, expressions with short-circuit `&&`/`||`, qualified function calls, `if`/`else if`, inclusive and stepped ranges, `for`/`while`/`loop`, `break`/`skip`, `ask ... else` failure handling, comments, string interpolation, streaming output, program arguments and exit status, file and directory access, environment access, and process execution.
 
-The next milestones are static type checking, source-span diagnostics, `pack` and `pick`, explicit error handling, and native code generation.
+The next milestones are static type checking, source-span diagnostics, pack methods and privacy, `pick`, explicit error handling, and native code generation.
 
 **Vanta is not intended to be a beginner-first language.** It assumes some prior programming experience.

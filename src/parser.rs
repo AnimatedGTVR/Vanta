@@ -30,18 +30,56 @@ impl Parser {
             uses.push(self.dotted_name("expected module name after `@use`")?);
             self.expect_simple(TokenKind::Semicolon, "expected `;` after `@use`")?;
         }
+        let mut packs = Vec::new();
         let mut functions = Vec::new();
         while !self.check(&TokenKind::Eof) {
             if self.check(&TokenKind::Use) {
                 return Err(self.error("`@use` must come before any function"));
             }
-            functions.push(self.function()?);
+            if self.take_simple(TokenKind::Pack) {
+                let pack = self.pack()?;
+                if packs
+                    .iter()
+                    .any(|existing: &Pack| existing.name == pack.name)
+                {
+                    return Err(self.error(format!("duplicate pack `{}`", pack.name)));
+                }
+                packs.push(pack);
+            } else {
+                functions.push(self.function()?);
+            }
         }
         Ok(Program {
             module,
             uses,
+            packs,
             functions,
         })
+    }
+
+    /// Parses one product-type declaration after its `pack` keyword.
+    fn pack(&mut self) -> Result<Pack, Diagnostic> {
+        let name = self.identifier("expected pack name")?;
+        if !name.chars().next().is_some_and(char::is_uppercase) {
+            return Err(self.error("pack names must begin with an uppercase letter"));
+        }
+        self.expect_simple(TokenKind::LeftBrace, "expected `{` after pack name")?;
+        let mut fields = Vec::new();
+        while !self.check(&TokenKind::RightBrace) {
+            let field = self.identifier("expected field name")?;
+            self.expect_simple(TokenKind::ColonColon, "expected `::` before field type")?;
+            let ty = self.ty()?;
+            self.expect_simple(TokenKind::Semicolon, "expected `;` after pack field")?;
+            if fields
+                .iter()
+                .any(|existing: &PackField| existing.name == field)
+            {
+                return Err(self.error(format!("duplicate field `{field}` in pack `{name}`")));
+            }
+            fields.push(PackField { name: field, ty });
+        }
+        self.advance();
+        Ok(Pack { name, fields })
     }
 
     fn dotted_name(&mut self, message: &str) -> Result<String, Diagnostic> {
@@ -404,7 +442,27 @@ impl Parser {
                     name.push('.');
                     name.push_str(&self.identifier("expected name after `.`")?);
                 }
-                Ok(Expression::Variable(name))
+                if name.chars().next().is_some_and(char::is_uppercase)
+                    && self.take_simple(TokenKind::LeftBrace)
+                {
+                    let mut fields = Vec::new();
+                    while !self.check(&TokenKind::RightBrace) {
+                        let field = self.identifier("expected field name")?;
+                        self.expect_simple(TokenKind::Equal, "expected `=` after field name")?;
+                        let value = self.expression()?;
+                        if fields.iter().any(|(existing, _)| existing == &field) {
+                            return Err(self.error(format!("duplicate field `{field}`")));
+                        }
+                        fields.push((field, value));
+                        if !self.take_simple(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect_simple(TokenKind::RightBrace, "expected `}` after pack value")?;
+                    Ok(Expression::Pack { name, fields })
+                } else {
+                    Ok(Expression::Variable(name))
+                }
             }
             TokenKind::LeftBracket => {
                 let mut items = Vec::new();
@@ -446,11 +504,7 @@ impl Parser {
                     self.expect_simple(TokenKind::Greater, "expected `>` after list element type")?;
                     Ok(Type::List(Box::new(element)))
                 }
-                _ => Err(Diagnostic::new(
-                    format!("unknown type `{name}`"),
-                    token.line,
-                    token.column,
-                )),
+                _ => Ok(Type::Named(name)),
             },
             _ => Err(Diagnostic::new("expected type", token.line, token.column)),
         }

@@ -93,6 +93,7 @@ impl Lexer {
         let kind = match text.as_str() {
             "module" => TokenKind::Module,
             "pub" => TokenKind::Pub,
+            "pack" => TokenKind::Pack,
             "func" => TokenKind::Func,
             "let" => TokenKind::Let,
             "mut" => TokenKind::Mut,

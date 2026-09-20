@@ -3,6 +3,7 @@ pub enum TokenKind {
     Module,
     Use,
     Pub,
+    Pack,
     Func,
     Let,
     Mut,

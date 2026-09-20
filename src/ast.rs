@@ -3,7 +3,20 @@ pub struct Program {
     pub module: String,
     /// Modules named by `@use A.B;`, in source order.
     pub uses: Vec<String>,
+    pub packs: Vec<Pack>,
     pub functions: Vec<Function>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pack {
+    pub name: String,
+    pub fields: Vec<PackField>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackField {
+    pub name: String,
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +44,7 @@ pub enum Type {
     Void,
     /// `list<T>`
     List(Box<Type>),
+    Named(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +115,10 @@ pub enum Expression {
     String(String),
     List(Vec<Expression>),
     Variable(String),
+    Pack {
+        name: String,
+        fields: Vec<(String, Expression)>,
+    },
     Unary {
         operator: UnaryOperator,
         operand: Box<Expression>,
