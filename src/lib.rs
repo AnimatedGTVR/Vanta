@@ -574,4 +574,103 @@ mod tests {
         "#;
         assert_eq!(run(source).unwrap(), "Vanta\n7\n");
     }
+
+    #[test]
+    fn constructs_typed_packs_and_reads_nested_fields() {
+        let source = r#"
+            module Main;
+            pack Position { x::int; y::int; }
+            pack Player { name::string; position::Position; }
+
+            func Describe(let player::Player)::string {
+                return "{player.name} is at {player.position.x},{player.position.y}";
+            }
+
+            func Start()::void {
+                let player::Player = Player {
+                    name = "Nova",
+                    position = Position { x = 4, y = 9 },
+                };
+                emit(Describe(player));
+                emit(player);
+            }
+        "#;
+        assert_eq!(
+            run(source).unwrap(),
+            "Nova is at 4,9\nPlayer { name = Nova, position = Position { x = 4, y = 9 } }\n"
+        );
+    }
+
+    #[test]
+    fn validates_pack_construction() {
+        let missing = r#"
+            module Main;
+            pack Player { name::string; score::int; }
+            func Start()::void { let player = Player { name = "Nova" }; }
+        "#;
+        assert!(
+            run(missing)
+                .unwrap_err()
+                .message
+                .contains("missing field `score`")
+        );
+
+        let unknown = r#"
+            module Main;
+            pack Player { name::string; }
+            func Start()::void { let player = Player { name = "Nova", rank = 1 }; }
+        "#;
+        assert!(
+            run(unknown)
+                .unwrap_err()
+                .message
+                .contains("unknown field `rank`")
+        );
+
+        let wrong_type = r#"
+            module Main;
+            pack Player { score::int; }
+            func Start()::void { let player = Player { score = "high" }; }
+        "#;
+        assert!(
+            run(wrong_type)
+                .unwrap_err()
+                .message
+                .contains("does not match declared type")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_pack_fields_on_access() {
+        let source = r#"
+            module Main;
+            pack Player { name::string; }
+            func Start()::void {
+                let player = Player { name = "Nova" };
+                emit(player.score);
+            }
+        "#;
+        assert!(
+            run(source)
+                .unwrap_err()
+                .message
+                .contains("has no field `score`")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_pack_declarations() {
+        let source = r#"
+            module Main;
+            pack Player { name::string; }
+            pack Player { score::int; }
+            func Start()::void { }
+        "#;
+        assert!(
+            run(source)
+                .unwrap_err()
+                .message
+                .contains("duplicate pack `Player`")
+        );
+    }
 }
