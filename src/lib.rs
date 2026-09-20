@@ -48,4 +48,31 @@ mod tests {
         let source = "module Main; func Start()::void { let x = 1; x = 2; }";
         assert!(run(source).unwrap_err().message.contains("immutable"));
     }
+
+    #[test]
+    fn rejects_out_of_range_integer_literals() {
+        let source = "module Main; func Start()::void { emit(9223372036854775808); }";
+        assert!(run(source).unwrap_err().message.contains("out of range"));
+    }
+
+    #[test]
+    fn reports_integer_overflow() {
+        let source = "module Main; func Start()::void { emit(9223372036854775807 + 1); }";
+        assert!(run(source).unwrap_err().message.contains("overflow"));
+    }
+
+    #[test]
+    fn limits_recursive_calls() {
+        let source = r#"
+            module Main;
+            func Loop()::void { Loop(); }
+            func Start()::void { Loop(); }
+        "#;
+        assert!(
+            run(source)
+                .unwrap_err()
+                .message
+                .contains("maximum call depth")
+        );
+    }
 }

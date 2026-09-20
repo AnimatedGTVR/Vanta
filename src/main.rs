@@ -13,6 +13,9 @@ fn main() {
     });
     match vanta::run(&source) {
         Ok(output) => print!("{output}"),
-        Err(error) => { eprintln!("{error}"); process::exit(1); }
+        Err(error) => {
+            eprintln!("{error}");
+            process::exit(1);
+        }
     }
 }
