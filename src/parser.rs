@@ -153,6 +153,12 @@ impl Parser {
             self.loop_depth -= 1;
             return Ok(Statement::While { condition, body });
         }
+        if self.take_simple(TokenKind::Loop) {
+            self.loop_depth += 1;
+            let body = self.block()?;
+            self.loop_depth -= 1;
+            return Ok(Statement::Loop { body });
+        }
         if self.take_simple(TokenKind::Break) {
             if self.loop_depth == 0 {
                 return Err(self.error("`break` may only be used inside a loop"));
