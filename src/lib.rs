@@ -191,6 +191,51 @@ mod tests {
     }
 
     #[test]
+    fn provides_immutable_module_configuration() {
+        let source = r#"
+            module Main;
+            let walkSpeed::float = 4.0;
+            let runSpeed::float = walkSpeed + 3.0;
+
+            func Speed(let sprinting::bool)::float {
+                if sprinting { return runSpeed; }
+                return walkSpeed;
+            }
+
+            func Start()::void {
+                emit(Speed(false));
+                emit(Speed(true));
+                emit("walk={walkSpeed}");
+            }
+        "#;
+        assert_eq!(run(source).unwrap(), "4\n7\nwalk=4\n");
+    }
+
+    #[test]
+    fn rejects_mutable_or_effectful_module_bindings() {
+        let mutable = "module Main; mut speed = 4.0; func Start()::void { }";
+        assert!(run(mutable).unwrap_err().message.contains("must use `let`"));
+
+        let call = "module Main; let speed = Math.Sqrt(16.0); func Start()::void { }";
+        assert!(
+            run(call)
+                .unwrap_err()
+                .message
+                .contains("cannot call functions")
+        );
+    }
+
+    #[test]
+    fn rejects_assignment_to_module_bindings() {
+        let source = r#"
+            module Main;
+            let speed = 4.0;
+            func Start()::void { speed = 7.0; }
+        "#;
+        assert!(run(source).unwrap_err().message.contains("immutable"));
+    }
+
+    #[test]
     fn keeps_float_literals_distinct_from_ranges() {
         let source = r#"
             module Main;
