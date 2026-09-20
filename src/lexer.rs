@@ -145,6 +145,23 @@ impl Lexer {
         while self.peek().is_some_and(|c| c.is_ascii_digit()) {
             text.push(self.advance());
         }
+        if self.peek() == Some('.') && self.peek_next().is_some_and(|c| c.is_ascii_digit()) {
+            text.push(self.advance());
+            while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                text.push(self.advance());
+            }
+            let value = text
+                .parse::<f64>()
+                .map_err(|_| Diagnostic::new("invalid float literal", line, column))?;
+            if !value.is_finite() {
+                return Err(Diagnostic::new("float literal out of range", line, column));
+            }
+            return Ok(Token {
+                kind: TokenKind::Float(value),
+                line,
+                column,
+            });
+        }
         let value = text
             .parse::<i64>()
             .map_err(|_| Diagnostic::new("integer literal out of range", line, column))?;
