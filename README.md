@@ -64,14 +64,18 @@ Available APIs:
 | `String` | `Length`, `Contains`, `StartsWith`, `EndsWith`, `ToUpper`, `ToLower`, `Trim`, `Replace`, `From`, `Split`, `IndexOf`, `Substring`, `ToInt`, `Compare` |
 | `List` | `Length`, `Push`, `Contains`, `Join` |
 | `Math` | `Sqrt` |
+| `Path` | `Join`, `Parent`, `FileName`, `Extension`, `IsAbsolute`, `Canonicalize` |
 | `File` | `Exists`, `ReadText`, `WriteText`, `AppendText`, `Copy`, `Remove` |
 | `Dir` | `Exists`, `Create`, `List` |
-| `Process` | `Exec`, `Capture`, `Exit`, `Run`, `Output` |
+| `Process` | `Exec`, `Capture`, `Exists`, `Exit`, `Run`, `Output` |
 | `Env` | `Args`, `Has`, `Get` |
+| `System` | `Platform`, `Arch`, `CurrentDir`, `HomeDir` |
 
 `Process.Exec(["git", "fetch", ref])` runs a program with its arguments directly, no shell involved, sharing the terminal, and returns its exit code. `Process.Capture([...])` does the same but returns standard output, failing if the program exits unsuccessfully. Prefer these: `Process.Run` and `Process.Output` take a single command string and execute it through the platform shell, so programs must never put untrusted text into them.
 
 `emitError(value)` writes a line to standard error, like `emit` does to standard output. `Env.Args()` returns the arguments after the program file (`vanta run tool.vanta channel set edge`), and `Process.Exit(code)` ends the program with that exit status.
+
+For Linux automation, `Path.Join` combines a `list<string>` using the host separator, `Path.Canonicalize` resolves an existing path, and `Process.Exists` searches `PATH` for an executable without invoking a shell. Run `cargo run -- run examples/abora_probe.vanta` for a small Abora-oriented system probe.
 
 ## Lists and loops
 
