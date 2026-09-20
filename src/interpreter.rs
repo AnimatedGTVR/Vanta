@@ -9,11 +9,13 @@ use crate::diagnostic::Diagnostic;
 const MAX_CALL_DEPTH: usize = 256;
 
 /// Namespaces reserved for the standard library; modules may not use them as names.
-pub const BUILTIN_NAMESPACES: &[&str] = &["String", "List", "File", "Dir", "Process", "Env"];
+pub const BUILTIN_NAMESPACES: &[&str] =
+    &["String", "List", "Math", "File", "Dir", "Process", "Env"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
+    Float(f64),
     Bool(bool),
     String(String),
     List(Vec<Value>),
@@ -28,6 +30,7 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Int(v) => write!(f, "{v}"),
+            Value::Float(v) => write!(f, "{v}"),
             Value::Bool(v) => write!(f, "{v}"),
             Value::String(v) => write!(f, "{v}"),
             Value::List(items) => {
@@ -551,6 +554,7 @@ impl<'a> Interpreter<'a> {
     ) -> Result<Value, Halt> {
         match expression {
             Expression::Integer(v) => Ok(Value::Int(*v)),
+            Expression::Float(v) => Ok(Value::Float(*v)),
             Expression::Bool(v) => Ok(Value::Bool(*v)),
             Expression::String(v) => Ok(Value::String(interpolate(v, scopes)?)),
             Expression::List(items) => Ok(Value::List(
@@ -601,6 +605,7 @@ impl<'a> Interpreter<'a> {
                         .checked_neg()
                         .map(Value::Int)
                         .ok_or_else(|| runtime("integer overflow").into()),
+                    (UnaryOperator::Negate, Value::Float(v)) => Ok(Value::Float(-v)),
                     (UnaryOperator::Not, Value::Bool(v)) => Ok(Value::Bool(!v)),
                     _ => Err(runtime("invalid unary operation").into()),
                 }
@@ -684,19 +689,30 @@ fn binary(left: Value, operator: BinaryOperator, right: Value) -> Result<Value, 
     use BinaryOperator::*;
     match (left, operator, right) {
         (Value::Int(a), Add, Value::Int(b)) => checked_integer(a.checked_add(b)),
+        (Value::Float(a), Add, Value::Float(b)) => checked_float(a + b),
         (Value::String(a), Add, Value::String(b)) => Ok(Value::String(a + &b)),
         (Value::Int(a), Subtract, Value::Int(b)) => checked_integer(a.checked_sub(b)),
+        (Value::Float(a), Subtract, Value::Float(b)) => checked_float(a - b),
         (Value::Int(a), Multiply, Value::Int(b)) => checked_integer(a.checked_mul(b)),
+        (Value::Float(a), Multiply, Value::Float(b)) => checked_float(a * b),
         (Value::Int(_), Divide, Value::Int(0)) => Err(runtime("division by zero")),
         (Value::Int(a), Divide, Value::Int(b)) => checked_integer(a.checked_div(b)),
+        (Value::Float(_), Divide, Value::Float(0.0)) => Err(runtime("division by zero")),
+        (Value::Float(a), Divide, Value::Float(b)) => checked_float(a / b),
         (Value::Int(_), Remainder, Value::Int(0)) => Err(runtime("remainder by zero")),
         (Value::Int(a), Remainder, Value::Int(b)) => checked_integer(a.checked_rem(b)),
+        (Value::Float(_), Remainder, Value::Float(0.0)) => Err(runtime("remainder by zero")),
+        (Value::Float(a), Remainder, Value::Float(b)) => checked_float(a % b),
         (a, Equal, b) => Ok(Value::Bool(a == b)),
         (a, NotEqual, b) => Ok(Value::Bool(a != b)),
         (Value::Int(a), Less, Value::Int(b)) => Ok(Value::Bool(a < b)),
+        (Value::Float(a), Less, Value::Float(b)) => Ok(Value::Bool(a < b)),
         (Value::Int(a), LessEqual, Value::Int(b)) => Ok(Value::Bool(a <= b)),
+        (Value::Float(a), LessEqual, Value::Float(b)) => Ok(Value::Bool(a <= b)),
         (Value::Int(a), Greater, Value::Int(b)) => Ok(Value::Bool(a > b)),
+        (Value::Float(a), Greater, Value::Float(b)) => Ok(Value::Bool(a > b)),
         (Value::Int(a), GreaterEqual, Value::Int(b)) => Ok(Value::Bool(a >= b)),
+        (Value::Float(a), GreaterEqual, Value::Float(b)) => Ok(Value::Bool(a >= b)),
         _ => Err(runtime("invalid binary operation")),
     }
 }
@@ -705,6 +721,14 @@ fn checked_integer(value: Option<i64>) -> Result<Value, Diagnostic> {
     value
         .map(Value::Int)
         .ok_or_else(|| runtime("integer overflow"))
+}
+
+fn checked_float(value: f64) -> Result<Value, Diagnostic> {
+    if value.is_finite() {
+        Ok(Value::Float(value))
+    } else {
+        Err(runtime("float result is not finite"))
+    }
 }
 
 fn ensure_type(value: &Value, ty: &Type) -> Result<(), Diagnostic> {
@@ -718,6 +742,7 @@ fn ensure_type(value: &Value, ty: &Type) -> Result<(), Diagnostic> {
 fn matches_type(value: &Value, ty: &Type) -> bool {
     match (value, ty) {
         (Value::Int(_), Type::Int)
+        | (Value::Float(_), Type::Float)
         | (Value::Bool(_), Type::Bool)
         | (Value::String(_), Type::String)
         | (Value::Void, Type::Void) => true,
