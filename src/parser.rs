@@ -30,13 +30,25 @@ impl Parser {
             uses.push(self.dotted_name("expected module name after `@use`")?);
             self.expect_simple(TokenKind::Semicolon, "expected `;` after `@use`")?;
         }
+        let mut globals = Vec::new();
         let mut packs = Vec::new();
         let mut functions = Vec::new();
         while !self.check(&TokenKind::Eof) {
             if self.check(&TokenKind::Use) {
                 return Err(self.error("`@use` must come before any function"));
             }
-            if self.take_simple(TokenKind::Pack) {
+            if self.take_simple(TokenKind::Let) {
+                let global = self.global()?;
+                if globals
+                    .iter()
+                    .any(|existing: &Global| existing.name == global.name)
+                {
+                    return Err(self.error(format!("duplicate module binding `{}`", global.name)));
+                }
+                globals.push(global);
+            } else if self.check(&TokenKind::Mut) {
+                return Err(self.error("module-level bindings must use `let`, not `mut`"));
+            } else if self.take_simple(TokenKind::Pack) {
                 let pack = self.pack()?;
                 if packs
                     .iter()
@@ -52,9 +64,27 @@ impl Parser {
         Ok(Program {
             module,
             uses,
+            globals,
             packs,
             functions,
         })
+    }
+
+    /// Parses an immutable module-level configuration value.
+    fn global(&mut self) -> Result<Global, Diagnostic> {
+        let name = self.identifier("expected module binding name")?;
+        let ty = if self.take_simple(TokenKind::ColonColon) {
+            Some(self.ty()?)
+        } else {
+            None
+        };
+        self.expect_simple(TokenKind::Equal, "expected `=` in module binding")?;
+        let value = self.expression()?;
+        if !constant_expression(&value) {
+            return Err(self.error("module binding initializers cannot call functions"));
+        }
+        self.expect_simple(TokenKind::Semicolon, "expected `;` after module binding")?;
+        Ok(Global { name, ty, value })
     }
 
     /// Parses one product-type declaration after its `pack` keyword.
@@ -561,5 +591,27 @@ impl Parser {
     }
     fn error(&self, message: impl Into<String>) -> Diagnostic {
         Diagnostic::new(message, self.peek().line, self.peek().column)
+    }
+}
+
+fn constant_expression(expression: &Expression) -> bool {
+    match expression {
+        Expression::Integer(_)
+        | Expression::Float(_)
+        | Expression::Bool(_)
+        | Expression::String(_)
+        | Expression::Variable(_) => true,
+        Expression::List(items) => items.iter().all(constant_expression),
+        Expression::Pack { fields, .. } => {
+            fields.iter().all(|(_, value)| constant_expression(value))
+        }
+        Expression::Unary { operand, .. } => constant_expression(operand),
+        Expression::Binary { left, right, .. } | Expression::Logical { left, right, .. } => {
+            constant_expression(left) && constant_expression(right)
+        }
+        Expression::Index { target, index } => {
+            constant_expression(target) && constant_expression(index)
+        }
+        Expression::Call { .. } => false,
     }
 }
