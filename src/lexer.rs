@@ -104,6 +104,7 @@ impl Lexer {
             "in" => TokenKind::In,
             "by" => TokenKind::By,
             "while" => TokenKind::While,
+            "loop" => TokenKind::Loop,
             "break" => TokenKind::Break,
             "skip" => TokenKind::Skip,
             "ask" => TokenKind::Ask,

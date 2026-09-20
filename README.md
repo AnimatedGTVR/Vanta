@@ -96,7 +96,7 @@ func Start()::void {
 
 ## Advanced control flow
 
-Vanta supports `while`, `break`, and `skip` (`skip` begins the next loop iteration):
+Vanta supports conditional `while` loops, unconditional `loop` blocks, `break`, and `skip` (`skip` begins the next loop iteration):
 
 ```vanta
 mut value = 0;
@@ -105,6 +105,16 @@ while value < 10 {
     if value % 2 == 0 { skip; }
     if value > 7 { break; }
     emit(value);
+}
+```
+
+Use `loop` when the exit condition belongs inside the body:
+
+```vanta
+mut attempts = 0;
+loop {
+    attempts = attempts + 1;
+    if attempts == 3 { break; }
 }
 ```
 
@@ -206,7 +216,7 @@ String literals support the escapes `\n`, `\t`, `\r`, `\0`, `\"` and `\\`, and i
 
 ## Current Status
 
-Vanta is in early development. The Rust reference implementation currently supports modules and `@use` imports, `pub` and private functions, typed parameters and returns, immutable and mutable bindings, primitive values, `list<T>`, typed `pack` values and field access, expressions with short-circuit `&&`/`||`, qualified function calls, `if`/`else if`, inclusive and stepped ranges, `for`/`while`, `break`/`skip`, `ask ... else` failure handling, comments, string interpolation, streaming output, program arguments and exit status, file and directory access, environment access, and process execution.
+Vanta is in early development. The Rust reference implementation currently supports modules and `@use` imports, `pub` and private functions, typed parameters and returns, immutable and mutable bindings, primitive values and `list<T>`, expressions with short-circuit `&&`/`||`, qualified function calls, `if`/`else if`, inclusive and stepped ranges, `for`/`while`/`loop`, `break`/`skip`, `ask ... else` failure handling, comments, string interpolation, streaming output, program arguments and exit status, file and directory access, environment access, and process execution.
 
 The next milestones are static type checking, source-span diagnostics, pack methods and privacy, `pick`, explicit error handling, and native code generation.
 

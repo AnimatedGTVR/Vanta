@@ -474,6 +474,13 @@ impl<'a> Interpreter<'a> {
                         Flow::Normal | Flow::Skip => {}
                     }
                 },
+                Statement::Loop { body } => loop {
+                    match self.execute_block(module, body, scopes)? {
+                        Flow::Return(value) => return Ok(Flow::Return(value)),
+                        Flow::Break => break,
+                        Flow::Normal | Flow::Skip => {}
+                    }
+                },
                 Statement::Break => return Ok(Flow::Break),
                 Statement::Skip => return Ok(Flow::Skip),
                 Statement::Ask {
