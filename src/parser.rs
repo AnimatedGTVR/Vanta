@@ -536,6 +536,12 @@ impl Parser {
                     self.expect_simple(TokenKind::Greater, "expected `>` after list element type")?;
                     Ok(Type::List(Box::new(element)))
                 }
+                "map" => {
+                    self.expect_simple(TokenKind::Less, "expected `<` after `map`")?;
+                    let value = self.ty()?;
+                    self.expect_simple(TokenKind::Greater, "expected `>` after map value type")?;
+                    Ok(Type::Map(Box::new(value)))
+                }
                 _ => Ok(Type::Named(name)),
             },
             _ => Err(Diagnostic::new("expected type", token.line, token.column)),
