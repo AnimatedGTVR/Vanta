@@ -61,6 +61,9 @@ pub enum Statement {
         condition: Expression,
         body: Vec<Statement>,
     },
+    Loop {
+        body: Vec<Statement>,
+    },
     Break,
     Skip,
     /// `let name = ask Expr else { };` (binding: the else block must return or exit)
