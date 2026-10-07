@@ -530,6 +530,7 @@ impl Parser {
                 "bool" => Ok(Type::Bool),
                 "string" => Ok(Type::String),
                 "void" => Ok(Type::Void),
+                "json" => Ok(Type::Json),
                 "list" => {
                     self.expect_simple(TokenKind::Less, "expected `<` after `list`")?;
                     let element = self.ty()?;

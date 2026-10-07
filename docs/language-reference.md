@@ -54,6 +54,7 @@ Module initializers may use literals, collections, packs, operators, indexing, a
 | `bool` | `true` | `true` or `false` |
 | `string` | `"Vanta"` | UTF-8 text |
 | `void` | function-only | No returned value |
+| `json` | returned by `Json.Parse` | Any JSON-compatible value, including heterogeneous arrays/objects and `null` |
 | `list<T>` | `[1, 2, 3]` | Ordered homogeneous collection when typed |
 | `map<T>` | returned by `Config.Parse` | String-keyed homogeneous map when typed |
 
@@ -63,6 +64,7 @@ Type annotations use `::`:
 let edition::string = "COSMIC";
 let ports::list<int> = [80, 443];
 let release::map<string> = Config.Parse(text);
+let plan::json = Json.Parse(text);
 ```
 
 Lists and maps validate every element/value when assigned to a declared type or passed through a typed parameter.

@@ -94,6 +94,8 @@ For Linux automation, `Path.Join` combines a `list<string>` using the host separ
 
 `Config.Parse(text)` reads line-oriented `key=value` data into a typed `map<string>`. It supports comments, blank lines, dotted ANIX keys, and single- or double-quoted values. Duplicate keys, malformed lines, bad keys, and invalid escapes are recoverable failures with line numbers.
 
+`Json.Parse`, `Json.Stringify`, `Json.Check`, and `Json.Validate` provide structured JSON and a small schema subset for Abora plans and machine-readable command output. Parse errors include line/column; schema errors include JSON paths and source lines.
+
 ```vanta
 let release::map<string> = Config.Parse(File.ReadText("/etc/os-release"));
 let name = Map.GetOr(release, "PRETTY_NAME", "Unknown Linux");
