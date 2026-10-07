@@ -51,6 +51,8 @@ pub enum Type {
     Bool,
     String,
     Void,
+    /// Any value representable by JSON, including heterogeneous arrays/objects and null.
+    Json,
     /// `list<T>`
     List(Box<Type>),
     /// `map<T>` with string keys.

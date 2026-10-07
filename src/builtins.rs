@@ -163,6 +163,19 @@ pub fn call(name: &str, arguments: &[Value]) -> Option<Result<Value, Diagnostic>
             _ => Err(type_error(name, "one map")),
         },
         "Config.Parse" => unary_string(name, arguments, parse_key_value),
+        "Json.Parse" => unary_string(name, arguments, parse_json),
+        "Json.Stringify" => match arguments {
+            [value] => stringify_json(value).map(Value::String),
+            _ => Err(type_error(name, "one JSON value")),
+        },
+        "Json.Check" => match arguments {
+            [value, schema] => Ok(Value::Bool(validate_schema(value, schema, "$", None).is_ok())),
+            _ => Err(type_error(name, "a JSON value and a JSON schema")),
+        },
+        "Json.Validate" => match arguments {
+            [Value::String(text), Value::String(schema)] => validate_json_text(text, schema),
+            _ => Err(type_error(name, "JSON text and schema text")),
+        },
         "Path.Join" => string_list(name, arguments).map(|parts| {
             Value::String(
                 parts
@@ -417,6 +430,212 @@ fn parse_key_value(text: &str) -> Result<Value, Diagnostic> {
         }
     }
     Ok(Value::Map(entries))
+}
+
+fn parse_json(text: &str) -> Result<Value, Diagnostic> {
+    JsonParser::new(text).parse()
+}
+
+fn stringify_json(value: &Value) -> Result<String, Diagnostic> {
+    Ok(match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(value) => value.to_string(),
+        Value::Int(value) => value.to_string(),
+        Value::Float(value) if value.is_finite() => value.to_string(),
+        Value::Float(_) => return Err(error("JSON cannot represent a non-finite float")),
+        Value::String(value) => json_string(value),
+        Value::List(items) => format!(
+            "[{}]",
+            items.iter().map(stringify_json).collect::<Result<Vec<_>, _>>()?.join(",")
+        ),
+        Value::Map(entries) => format!(
+            "{{{}}}",
+            entries.iter().map(|(key, value)| Ok(format!("{}:{}", json_string(key), stringify_json(value)?)))
+                .collect::<Result<Vec<_>, Diagnostic>>()?.join(",")
+        ),
+        Value::Pack { .. } | Value::Void => return Err(type_error("Json.Stringify", "a JSON value")),
+    })
+}
+
+fn json_string(value: &str) -> String {
+    let mut output = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => output.push_str("\\\""), '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"), '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"), '\u{08}' => output.push_str("\\b"),
+            '\u{0c}' => output.push_str("\\f"), ch if ch < '\u{20}' => {
+                output.push_str(&format!("\\u{:04x}", ch as u32));
+            }
+            ch => output.push(ch),
+        }
+    }
+    output.push('"');
+    output
+}
+
+struct JsonParser<'a> { text: &'a str, index: usize, line: usize, column: usize }
+
+impl<'a> JsonParser<'a> {
+    fn new(text: &'a str) -> Self { Self { text, index: 0, line: 1, column: 1 } }
+    fn parse(mut self) -> Result<Value, Diagnostic> {
+        self.space();
+        let value = self.value()?;
+        self.space();
+        if self.peek().is_some() { return Err(self.fail("unexpected characters after JSON value")); }
+        Ok(value)
+    }
+    fn value(&mut self) -> Result<Value, Diagnostic> {
+        self.space();
+        match self.peek() {
+            Some('n') => { self.literal("null")?; Ok(Value::Null) }
+            Some('t') => { self.literal("true")?; Ok(Value::Bool(true)) }
+            Some('f') => { self.literal("false")?; Ok(Value::Bool(false)) }
+            Some('"') => self.string().map(Value::String),
+            Some('[') => self.array(), Some('{') => self.object(),
+            Some('-' | '0'..='9') => self.number(),
+            Some(_) => Err(self.fail("expected a JSON value")), None => Err(self.fail("unexpected end of input")),
+        }
+    }
+    fn array(&mut self) -> Result<Value, Diagnostic> {
+        self.bump(); self.space(); let mut items = Vec::new();
+        if self.take(']') { return Ok(Value::List(items)); }
+        loop {
+            items.push(self.value()?); self.space();
+            if self.take(']') { break; }
+            if !self.take(',') { return Err(self.fail("expected `,` or `]`")); }
+        }
+        Ok(Value::List(items))
+    }
+    fn object(&mut self) -> Result<Value, Diagnostic> {
+        self.bump(); self.space(); let mut entries = BTreeMap::new();
+        if self.take('}') { return Ok(Value::Map(entries)); }
+        loop {
+            self.space(); if self.peek() != Some('"') { return Err(self.fail("expected an object key")); }
+            let key = self.string()?; self.space();
+            if !self.take(':') { return Err(self.fail("expected `:` after object key")); }
+            let value = self.value()?;
+            if entries.insert(key.clone(), value).is_some() { return Err(self.fail(&format!("duplicate object key `{key}`"))); }
+            self.space(); if self.take('}') { break; }
+            if !self.take(',') { return Err(self.fail("expected `,` or `}`")); }
+        }
+        Ok(Value::Map(entries))
+    }
+    fn string(&mut self) -> Result<String, Diagnostic> {
+        self.bump(); let mut output = String::new();
+        loop { match self.bump() {
+            Some('"') => return Ok(output), Some('\\') => match self.bump() {
+                Some('"') => output.push('"'), Some('\\') => output.push('\\'), Some('/') => output.push('/'),
+                Some('b') => output.push('\u{08}'), Some('f') => output.push('\u{0c}'), Some('n') => output.push('\n'),
+                Some('r') => output.push('\r'), Some('t') => output.push('\t'), Some('u') => output.push(self.unicode()?),
+                _ => return Err(self.fail("invalid string escape")),
+            }, Some(ch) if ch >= '\u{20}' => output.push(ch), Some(_) => return Err(self.fail("control character in string")),
+            None => return Err(self.fail("unterminated string")),
+        }}
+    }
+    fn unicode(&mut self) -> Result<char, Diagnostic> {
+        let mut value = 0u32;
+        for _ in 0..4 { value = value * 16 + self.bump().and_then(|ch| ch.to_digit(16)).ok_or_else(|| self.fail("invalid unicode escape"))?; }
+        char::from_u32(value).ok_or_else(|| self.fail("invalid unicode scalar"))
+    }
+    fn number(&mut self) -> Result<Value, Diagnostic> {
+        let start = self.index; self.take('-');
+        if self.take('0') { if self.peek().is_some_and(|c| c.is_ascii_digit()) { return Err(self.fail("leading zero in number")); } }
+        else { if !self.peek().is_some_and(|c| c.is_ascii_digit()) { return Err(self.fail("invalid number")); } while self.peek().is_some_and(|c| c.is_ascii_digit()) { self.bump(); } }
+        let mut float = false;
+        if self.take('.') { float = true; if !self.peek().is_some_and(|c| c.is_ascii_digit()) { return Err(self.fail("expected digit after decimal point")); } while self.peek().is_some_and(|c| c.is_ascii_digit()) { self.bump(); } }
+        if matches!(self.peek(), Some('e' | 'E')) { float = true; self.bump(); if matches!(self.peek(), Some('+' | '-')) { self.bump(); } if !self.peek().is_some_and(|c| c.is_ascii_digit()) { return Err(self.fail("expected exponent digits")); } while self.peek().is_some_and(|c| c.is_ascii_digit()) { self.bump(); } }
+        let raw = &self.text[start..self.index];
+        if float { raw.parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Float) }
+        else { raw.parse::<i64>().ok().map(Value::Int) }.ok_or_else(|| self.fail("number is outside Vanta's supported range"))
+    }
+    fn literal(&mut self, expected: &str) -> Result<(), Diagnostic> { for ch in expected.chars() { if self.bump() != Some(ch) { return Err(self.fail(&format!("expected `{expected}`"))); } } Ok(()) }
+    fn space(&mut self) { while self.peek().is_some_and(char::is_whitespace) { self.bump(); } }
+    fn take(&mut self, expected: char) -> bool { if self.peek() == Some(expected) { self.bump(); true } else { false } }
+    fn peek(&self) -> Option<char> { self.text[self.index..].chars().next() }
+    fn bump(&mut self) -> Option<char> { let ch = self.peek()?; self.index += ch.len_utf8(); if ch == '\n' { self.line += 1; self.column = 1; } else { self.column += 1; } Some(ch) }
+    fn fail(&self, message: &str) -> Diagnostic { Diagnostic::failure(format!("`Json.Parse` line {}, column {}: {message}", self.line, self.column)) }
+}
+
+fn validate_json_text(text: &str, schema_text: &str) -> Result<Value, Diagnostic> {
+    let value = parse_json(text)?;
+    let schema = parse_json(schema_text).map_err(|mut diagnostic| {
+        diagnostic.message = diagnostic.message.replace("`Json.Parse`", "`Json.Validate` schema");
+        diagnostic
+    })?;
+    validate_schema(&value, &schema, "$", Some(text))?;
+    Ok(value)
+}
+
+fn validate_schema(value: &Value, schema: &Value, path: &str, source: Option<&str>) -> Result<(), Diagnostic> {
+    let Value::Map(rules) = schema else {
+        return Err(schema_failure(path, "schema must be an object", source));
+    };
+    if let Some(Value::String(expected)) = rules.get("type") {
+        let valid = match expected.as_str() {
+            "null" => matches!(value, Value::Null),
+            "boolean" => matches!(value, Value::Bool(_)),
+            "integer" => matches!(value, Value::Int(_)),
+            "number" => matches!(value, Value::Int(_) | Value::Float(_)),
+            "string" => matches!(value, Value::String(_)),
+            "array" => matches!(value, Value::List(_)),
+            "object" => matches!(value, Value::Map(_)),
+            _ => return Err(schema_failure(path, &format!("unknown schema type `{expected}`"), source)),
+        };
+        if !valid {
+            return Err(schema_failure(path, &format!("expected {expected}, found {}", json_kind(value)), source));
+        }
+    }
+    if let Value::Map(entries) = value {
+        if let Some(Value::List(required)) = rules.get("required") {
+            for item in required {
+                let Value::String(key) = item else {
+                    return Err(schema_failure(path, "`required` must contain strings", source));
+                };
+                if !entries.contains_key(key) {
+                    return Err(schema_failure(path, &format!("missing required property `{key}`"), source));
+                }
+            }
+        }
+        if let Some(Value::Map(properties)) = rules.get("properties") {
+            for (key, child_schema) in properties {
+                if let Some(child) = entries.get(key) {
+                    validate_schema(child, child_schema, &format!("{path}.{key}"), source)?;
+                }
+            }
+        }
+    }
+    if let (Value::List(items), Some(item_schema)) = (value, rules.get("items")) {
+        for (index, item) in items.iter().enumerate() {
+            validate_schema(item, item_schema, &format!("{path}[{index}]"), source)?;
+        }
+    }
+    Ok(())
+}
+
+fn schema_failure(path: &str, message: &str, source: Option<&str>) -> Diagnostic {
+    let line = source.map(|text| line_for_path(text, path)).unwrap_or(0);
+    Diagnostic::failure(format!("`Json.Validate` schema error at {path}, line {line}: {message}"))
+}
+
+fn line_for_path(text: &str, path: &str) -> usize {
+    let key = path.rsplit('.').next().unwrap_or("");
+    let key = key.split('[').next().unwrap_or(key);
+    if !key.is_empty() && key != "$" {
+        let needle = format!("\"{key}\"");
+        if let Some((index, _)) = text.lines().enumerate().find(|(_, line)| line.contains(&needle)) {
+            return index + 1;
+        }
+    }
+    1
+}
+
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null", Value::Bool(_) => "boolean", Value::Int(_) => "integer",
+        Value::Float(_) => "number", Value::String(_) => "string", Value::List(_) => "array",
+        Value::Map(_) => "object", Value::Pack { .. } => "pack", Value::Void => "void",
+    }
 }
 
 fn valid_config_key(key: &str) -> bool {

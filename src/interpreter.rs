@@ -10,11 +10,12 @@ const MAX_CALL_DEPTH: usize = 256;
 
 /// Namespaces reserved for the standard library; modules may not use them as names.
 pub const BUILTIN_NAMESPACES: &[&str] = &[
-    "String", "List", "Map", "Config", "Math", "Path", "File", "Dir", "Process", "Env", "System",
+    "String", "List", "Map", "Config", "Json", "Math", "Path", "File", "Dir", "Process", "Env", "System",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    Null,
     Int(i64),
     Float(f64),
     Bool(bool),
@@ -45,6 +46,7 @@ impl NativeHost for EmptyHost {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Value::Null => write!(f, "null"),
             Value::Int(v) => write!(f, "{v}"),
             Value::Float(v) => write!(f, "{v}"),
             Value::Bool(v) => write!(f, "{v}"),
@@ -841,6 +843,7 @@ fn matches_type(value: &Value, ty: &Type) -> bool {
         | (Value::Bool(_), Type::Bool)
         | (Value::String(_), Type::String)
         | (Value::Void, Type::Void) => true,
+        (value, Type::Json) => json_compatible(value),
         (Value::List(items), Type::List(element)) => {
             items.iter().all(|item| matches_type(item, element))
         }
@@ -849,6 +852,15 @@ fn matches_type(value: &Value, ty: &Type) -> bool {
         }
         (Value::Pack { name, .. }, Type::Named(expected)) => name == expected,
         _ => false,
+    }
+}
+
+fn json_compatible(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::String(_) => true,
+        Value::List(items) => items.iter().all(json_compatible),
+        Value::Map(entries) => entries.values().all(json_compatible),
+        Value::Pack { .. } | Value::Void => false,
     }
 }
 

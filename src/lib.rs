@@ -801,6 +801,47 @@ mod tests {
         assert_eq!(run(source).unwrap(), "true\ntrue\n");
     }
 
+    #[test]
+    fn parses_stringifies_and_checks_json() {
+        let source = r##"
+            module Main;
+            func Start()::void {
+                let plan::json = Json.Parse("{\"name\":\"upgrade\",\"steps\":[1,2.5,null],\"enabled\":true}");
+                emit(Map.Get(plan, "name"));
+                emit(Json.Stringify(plan));
+                let schema::json = Json.Parse(
+                    "{\"type\":\"object\",\"required\":[\"name\",\"steps\"],\"properties\":{\"name\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"number\"}}}}"
+                );
+                emit(Json.Check(plan, schema));
+            }
+        "##;
+        assert_eq!(
+            run(source).unwrap(),
+            "upgrade\n{\"enabled\":true,\"name\":\"upgrade\",\"steps\":[1,2.5,null]}\nfalse\n"
+        );
+    }
+
+    #[test]
+    fn json_failures_are_recoverable_and_source_aware() {
+        let source = r##"
+            module Main;
+            func Start()::void {
+                ask Json.Parse("{\n  \"name\": true,\n}") else {
+                    emit(String.Contains(error, "line 3"));
+                };
+                let checked::json = ask Json.Validate(
+                    "{\n  \"name\": 42\n}",
+                    "{\"type\":\"object\",\"required\":[\"name\"],\"properties\":{\"name\":{\"type\":\"string\"}}}"
+                ) else {
+                    emit(String.Contains(error, "$.name, line 2"));
+                    return;
+                };
+                emit(checked);
+            }
+        "##;
+        assert_eq!(run(source).unwrap(), "true\ntrue\n");
+    }
+
     #[cfg(unix)]
     #[test]
     fn runs_processes_by_argv_without_a_shell() {

@@ -57,6 +57,25 @@ Blank lines and full-line comments are ignored. Keys may contain ASCII letters, 
 
 Malformed lines, invalid keys, duplicate keys, unterminated quotes/escapes, and unknown escapes are recoverable failures containing the source line number.
 
+## `Json`
+
+- `Json.Parse(text)::json` parses objects, arrays, strings, booleans, integers, floats, and `null`. Syntax failures are recoverable and include line and column.
+- `Json.Stringify(value)::string` emits compact, deterministic JSON. Packs and `void` are rejected.
+- `Json.Check(value, schema)::bool` checks a parsed value without raising a schema mismatch.
+- `Json.Validate(text, schema_text)::json` parses and validates in one operation. Failures include a JSON path and the best matching source line.
+
+The initial schema subset supports `type`, `required`, `properties`, and `items`. Supported type names are `null`, `boolean`, `integer`, `number`, `string`, `array`, and `object`.
+
+```vanta
+let schema::json = Json.Parse(
+    "{\"type\":\"object\",\"required\":[\"version\"],\"properties\":{\"version\":{\"type\":\"integer\"}}}"
+);
+let plan::json = ask Json.Validate(File.ReadText("plan.json"), Json.Stringify(schema)) else {
+    emit(error);
+    Process.Exit(2);
+};
+```
+
 ## `Math`
 
 - `Math.Sqrt(value::float)::float` requires a non-negative float.
